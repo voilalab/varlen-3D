@@ -1,0 +1,139 @@
+# data
+dataset: 'shapenet'
+dataset_root: 'data/shapenet/processed_data.pkl'
+# not actually number of tokens, but the quantization resolution + 3
+num_tokens: 131
+max_len_trainset: null  # cap training set size (null = no cap, takes first n samples deterministically)
+max_len_valset: null  # cap validation set size (null = no cap, takes first n samples deterministically)
+
+gradient_accumulation_steps: 2 # used to simulate larger batch sizes
+batch_size: 32  # if gradient_accumulation_steps > 1, this is the micro-batch size
+block_size: 4608 # context_size of the transformer, for good performance block_size > max sequence length
+padding: 0.0  # fraction of padding allowed, when sequences are beyond the transformer context size
+
+scale_augment: true  # augment shapes by random scaling
+scale_augment_val: false  # augment val shapes by random scaling
+
+shift_augment: true  # augment shapes by shifting them in space
+shift_augment_val: false
+
+wandb_main: true # set to true to log to main board rather than debug board
+suffix: ''  # suffix for project name in wandb, if wandb_main is false, auto populated to dump debug experiments to a different project
+experiment: snet-vq # experiment name
+output_dir_prefix: './'
+seed: 77
+save_epoch: 1  # save every n epoch
+save_only_last: true  # save only the last few checkpoints
+sanity_steps: 1  # sanity steps before the run
+val_check_percent: 1.0  # check this proportion of val set when evaluation runs
+val_check_interval: 5  # run evaluation every x% of the train set steps
+resume: null  # resume from a checkpoint
+eval_only: false  # run the validation loop once on the vq_resume weights and exit (no training)
+num_workers: 24
+logger: false
+overfit: false  # overfitting dataloaders
+
+num_val_samples: 16  # number of meshes to visualize in evaluation
+max_val_tokens: 5000
+top_k_tokens: 200  # sampling top-k tokens
+top_p: 0.9  # p val for nucleus sampling
+temperature: 0.8  # temperature for sampling
+sequence_stride: 32  # use when sequences are larger than context length
+use_class_ids: false
+use_smoothed_loss: true  # smoothing over neighboring tokens in the quantized space
+
+use_point_feats: false  # point net like point features in graph network
+graph_conv: sage  # flavor of graph convs
+g_no_max_pool: true  # no max pooling in graph conv
+g_aggr: mean  # aggregation op in graph conv
+ce_output: true   # use quantized predictions
+embed_dim: 192   # vq embed dim
+n_embed: 16384  # vq num embeddings
+embed_loss_weight: 1.0
+embed_levels: 2  # rvq levels
+tri_weight: 0.0  # weight on geometric predictions
+norm_weight: 0.0
+area_weight: 0.0
+angle_weight: 0.0
+code_decay: 0.99  # code decay for vq
+embed_share: true  # share embeddings across rvq levels
+use_multimodal_loss: true  # multiple modes in ce loss when training vocabulary
+
+per_vertex_embed_dim: 192
+
+use_sequence_distillation: false
+#sequence_token_dim: 768  # dimension of distilled latents
+num_sequence_tokens: 256  # num_latents (number of distilled latents)
+use_nested_dropout: true
+use_causal_attention: false
+distill_before_vq: true
+n_decoder_self_attn_blocks: 24
+n_encoder_self_attn_blocks: 0  # self-attention layers on input face embeddings before compression
+encoder_zero_init: false  # zero-init encoder block residuals (identity at init); use when adding encoder blocks on top of a pretrained vq_resume checkpoint
+decoder_zero_init: false  # zero-init the residual branches of the decoder latent self-attn blocks (identity at init); use when growing the decoder stack on top of a vq_resume checkpoint
+use_order_preserving_ae: false  # use positional decoder to preserve input-output order correspondence
+decoder_use_rope: false  # use rotary position embeddings in decoder self-attention layers
+encoder_use_rope: false  # use rotary position embeddings in encoder self-attention layers
+encoder_use_pos_embed: false  # add sinusoidal positional encoding to encoder inputs before self-attention
+ae_recon_weight: 0.0  # weight for auxiliary AE reconstruction loss (0 to disable)
+ae_warmup_steps: 0  # steps before AE is fully active; blends AE output with input (0 to disable)
+ae_recon_unblended: false  # score aux recon loss on the pure AE output instead of the warmup blend (blended loss is ~0 while alpha is small)
+
+# --- variable-length mechanism ---
+varlen_mode: nested_dropout  # "nested_dropout" (mask tokens) | "prefix_truncation" (actually slice to first k latents, HAE-style)
+nested_dropout_size_sampling: uniform  # uniform | pow2 | uniform_pow2 | cubic (p(k)~k^2, top-heavy; the image-side flow winner)
+ae_cross_heads: 1  # heads for the AE pooling/readout cross-attns (1 = original single-head)
+query_binding: none  # none | rope (query i at face i*stride, stride = max faces / latents) | rope_relative (stride = each mesh's own faces / latents)
+latent_quant_bits: 0  # scalar quantization of the kept latents at the AE bottleneck: 0 off; 4/8 per-token absmax uniform; 16 bfloat16 (eval_only rate points)
+latent_quant_train: false  # also quantize in train mode (straight-through), for a quantization fine-tune stage
+use_rank_pe_latents: false  # add sinusoidal PE of the latent INDEX (coarse-to-fine rank) to latents after dropout/truncation
+num_sink_tokens: 0  # learned always-visible latents prepended after dropout/truncation; never dropped, excluded from keep_k
+
+# --- decoder family / frozen-base training ---
+ae_type: regression  # "regression" | "flow" (rectified-flow generative decoder; requires freeze_base)
+freeze_base: false  # freeze encoder/decoder/pre_quant/post_quant/vq (requires vq_resume); train only the shape2vecset AE
+freeze_codebook: false  # with freeze_base=false: keep the RVQ codebook fixed (buffers restored after every training pass) while the rest of the base trains
+ae_only_loss: false  # with regression + freeze_base: train on masked feature MSE only (matched control for ae_type=flow)
+split_grad: false  # joint arms: full-rate pass trains everything, a second pass at the sampled k trains only the AE (base + codebook protected)
+code_cls_weight: 0.0  # cross-entropy over codebook entries between the AE's corner features and the clean features' codes (0 to disable)
+curriculum_latent_steps: 0  # first N optimizer steps: latent-side losses only (feature MSE, codebook CE, commitment); coordinate CE + geometry terms after (the image-side curriculum)
+flow_decoder_depth: 8  # DiT-style blocks in the flow decoder (ae_type=flow)
+flow_steps: 20  # Euler ODE steps at inference (ae_type=flow)
+flow_t_sampling: logit_normal  # "logit_normal" (SD3) | "mode" (SD3 mode sampling, s=flow_mode_scale) | "uniform" (ae_type=flow)
+flow_conditioning: cross_attn  # "cross_attn" | "in_sequence" (prepend latents to face sequence, FlexTok-register style)
+flow_mode_scale: 0.25  # s for flow_t_sampling=mode (FlexTok: 0.25)
+flow_null_prob: 0.0  # CFG training: replace condition w/ learned null at this prob (FlexTok: 0.2)
+flow_guidance: 1.0  # CFG scale at ODE sampling (1.0 = off; needs flow_null_prob > 0 at train)
+repa_weight: 0.0  # mesh REPA analog: align mid-decoder features to clean face features (ae_type=flow)
+repa_layer: 2  # flow block index for the REPA feature tap
+
+vq_resume: null  # path to trained vocab when training the transformer
+ft_resume: null  # path to transformer trained on all categories when finetuning
+ft_category: null  # shapenet category to finetune
+transformer: noembed
+distribute_features: true  # distribute face features across vertices
+low_augment: false  # lower the scale of augmentation
+
+# model
+model:
+  in_emb: 3
+  n_layer: 24
+  n_head: 16
+  n_embd: 768
+  dropout: 0.0  # for pretraining 0 is good, for finetuning try 0.1+
+  bias: false  # do we use bias inside LayerNorm and Linear layers?
+
+# adamw optimizer
+lr: 1e-4  # max learning rate
+max_epoch: 2000  # total number of training iterations
+weight_decay: 0.1
+beta1: 0.9
+beta2: 0.95
+grad_clip: 1.0  # clip gradients at this value, or disable if == 0.0
+
+# learning rate decay settings
+warmup_steps: 2000  # how many steps to warm up for
+min_lr: 6.0e-05  # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
+
+only_chairs: false
+stochasticity: 0.1
