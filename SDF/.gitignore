@@ -11,8 +11,9 @@ build/
 # Jupyter
 .ipynb_checkpoints/
 
-# Data and checkpoints
-data/
+# Data and checkpoints (exclude raw data files but keep split lists)
+data/*
+!data/*.txt
 output/
 *.pth
 *.npz
