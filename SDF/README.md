@@ -196,4 +196,3 @@ python infer_hae.py \
 Outputs: `infer_out/baseline.obj`, `infer_out/L{L:04d}.obj` for each prefix length, `infer_out/rd_curve.png`, and `infer_out/results.csv`.
 
 ---
-```
