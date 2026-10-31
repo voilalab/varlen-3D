@@ -74,7 +74,7 @@ Each shape is stored as a `.npz` file containing:
 | `near_points` | (K, 3) | Near-surface query points |
 | `near_sdf` | (K,) | SDF values at near-surface points |
 
-Place all `.npz` files in a single flat directory (e.g., `./data/`). The dataset class performs a 90/10 train/val split by sorted filename.
+We use the **chairs** subset of [ShapeNet](https://shapenet.org/). Place all `.npz` files in a single flat directory (e.g., `./data/`). The train/test split (6100 / 678 shapes) is provided in `data/train.txt` and `data/test.txt`.
 
 > Data preprocessing follows [this repository](https://github.com/1zb/sdf_gen) using the sphere normalization scheme. 
 
