@@ -1,0 +1,25 @@
+name: varlen
+channels:
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+    # PyTorch with CUDA 12.4 — adjust the index URL for your CUDA version
+    # See https://pytorch.org/get-started/locally/ for other combinations
+    - torch==2.6.0+cu124
+    - torchvision==0.21.0+cu124
+    # Flash-Attention (requires CUDA and a compatible compiler; build from source
+    # if a pre-built wheel is not available for your platform)
+    # pip install flash-attn --no-build-isolation
+    - flash-attn==2.7.4.post1
+    - einops==0.8.2
+    - numpy==2.3.5
+    - scipy==1.17.1
+    - matplotlib==3.10.8
+    - trimesh==4.11.3
+    - pymcubes==0.1.6
+    - tensorboard==2.20.0
+    - tqdm==4.67.3
+    # Optional: Weights & Biases logging
+    - wandb==0.26.0

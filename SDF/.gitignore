@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data and checkpoints
+data/
+output/
+*.pth
+*.npz
+
+# Experiment artifacts
+paper_shapes*/
+*.zip
+*.json
+results/
+
+# macOS
+.DS_Store
+._.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Misc
+CLAUDE.md
+*.pth
+learnable.pth
+pointwise.pth
