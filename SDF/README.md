@@ -154,7 +154,7 @@ Checkpoints are saved every 5 epochs to `output_dir/checkpoint-{epoch}.pth`.
 
 ## 5. Evaluation
 
-Evaluate a trained HAE on the validation set, computing Chamfer distance at each prefix length (powers of 2 from 1 to 1024):
+Evaluate a trained HAE on the test set, computing Chamfer distance at each prefix length (powers of 2 from 1 to 1024):
 
 ```bash
 python eval_hae_rd.py \
