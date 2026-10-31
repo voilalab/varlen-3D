@@ -1,6 +1,6 @@
 # VarLen — Variable-Length 3D Shape Encoding
 
-This repository contains the training and evaluation code for **VarLen**, a variable-length shape tokenizer that wraps a frozen base shape autoencoder with a HyperAutoEncoder (HAE). The HAE learns to produce an ordered sequence of tokens such that any prefix of length *L* reconstructs the shape at a fidelity proportional to *L* — a continuous rate-distortion tradeoff with no retraining.
+This repository contains the training and evaluation code for **VarLen-3D**, a variable-length shape tokenizer that adapts a frozen base Point-clout to SDF autoencoder with a HyperAutoEncoder (HAE). The HAE learns to produce an ordered sequence of latents such that any prefix of length *L* reconstructs the shape at a fidelity that increases with *L* to achieve a continuous rate-distortion tradeoff with no retraining of the base model.
 
 ## Architecture overview
 
@@ -76,7 +76,7 @@ Each shape is stored as a `.npz` file containing:
 
 Place all `.npz` files in a single flat directory (e.g., `./data/`). The dataset class performs a 90/10 train/val split by sorted filename.
 
-> Data preprocessing instructions (mesh normalization, SDF sampling, etc.) will be added separately.
+> Data preprocessing follows [this repository](https://github.com/1zb/sdf_gen) using the sphere normalization scheme. 
 
 ---
 
@@ -88,7 +88,7 @@ The HAE operates on top of a pretrained base shape autoencoder (`learnable_vec10
 checkpoints/base_model.pth
 ```
 
-> The checkpoint will be hosted at [link to be added]. It will be approximately 5 GB.
+> We use the base checkpoint provided by the [VecSetX](https://github.com/1zb/VecSetX/) repository. Specifically, we use [this checkpoint file](https://huggingface.co/Zbalpha/VecSetX/blob/main/learnable_vec1024x32_dim1024_depth24_sdf_nb/checkpoint-125.pth) that uses learnable queries.
 
 ---
 
@@ -150,10 +150,6 @@ torchrun --nproc_per_node=4 main_hae.py \
 
 Checkpoints are saved every 5 epochs to `output_dir/checkpoint-{epoch}.pth`.
 
-### Single-GPU training
-
-Replace `torchrun --nproc_per_node=4` with `python` for single-GPU runs.
-
 ---
 
 ## 5. Evaluation
@@ -163,7 +159,7 @@ Evaluate a trained HAE on the validation set, computing Chamfer distance at each
 ```bash
 python eval_hae_rd.py \
     --base_pth checkpoints/base_model.pth \
-    --hae_pth ./output/hae_stage2/checkpoint-99.pth \
+    --hae_pth ./output/hae_stage2/checkpoint.pth \
     --data_path ./data/ \
     --working_dim 512 \
     --encoder_depth 8 \
@@ -175,21 +171,11 @@ python eval_hae_rd.py \
 
 Outputs: `eval_out/rd_curve.png` (RD curve plot) and `eval_out/results.csv` (per-shape, per-prefix Chamfer distances).
 
+You can download our pre-trained checkpoint [here](https://utexas.box.com/s/pnjhb14gx58o55lg5acyu92b33v887n9).
+
 ---
 
 ## 6. Inference
-
-### Base autoencoder (no HAE)
-
-Reconstruct a single shape using only the base model:
-
-```bash
-python infer.py \
-    --pth checkpoints/base_model.pth \
-    --input path/to/shape.obj \
-    --output path/to/output.obj \
-    --resolution 128
-```
 
 ### HAE (rate-distortion curve for a single shape)
 
@@ -210,15 +196,5 @@ python infer_hae.py \
 Outputs: `infer_out/baseline.obj`, `infer_out/L{L:04d}.obj` for each prefix length, `infer_out/rd_curve.png`, and `infer_out/results.csv`.
 
 ---
-
-## Citation
-
-If you use this code, please cite:
-
-```bibtex
-@article{varlen2025,
-  title   = {VarLen: Variable-Length 3D Shape Tokenization},
-  author  = {},
-  year    = {2025},
 }
 ```
