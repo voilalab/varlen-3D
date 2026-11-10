@@ -1,0 +1,115 @@
+# Modifications to Neural Geometry Fields (https://github.com/iveevi/ngf), commit 1cfe0b8.
+# Copyright of the original code belongs to its authors. The upstream repository has no
+# license file; this patch is distributed only so the benchmark can be reproduced from a
+# checkout of upstream. See THIRD_PARTY_NOTICES.md.
+
+diff --git a/source/train.py b/source/train.py
+index 0770abd..5ed3eb5 100644
+--- a/source/train.py
++++ b/source/train.py
+@@ -3,6 +3,7 @@ import json
+ import tqdm
+ import torch
+ import logging
++import matplotlib.pyplot as plt
+ import ngfutil
+ import argparse
+ import pymeshlab
+@@ -25,9 +26,10 @@ class Trainer:
+         ms.save_current_mesh(destination)
+         logging.info(f'Quadrangulated mesh into {destination}')
+ 
+-    def __init__(self, mesh: str, lod: int, features: int, batch: int):
++    def __init__(self, mesh: str, lod: int, features: int, batch: int, quad_timeout: int = 180):
+         # Properties
+         self.path = os.path.abspath(mesh)
++        self.quad_timeout = quad_timeout
+         self.cameras = 200
+         self.batch = batch
+         self.losses = {}
+@@ -46,8 +48,8 @@ class Trainer:
+         proc = multiprocessing.Process(target=Trainer.quadrangulate_surface, args=qargs)
+         proc.start()
+ 
+-        # Wait for minute before termimating
+-        proc.join(60)
++        # Wait for quadrangulation (longer for large ShapeNet meshes)
++        proc.join(self.quad_timeout)
+         if proc.is_alive():
+             logging.error('Quadrangulation running overtime')
+             proc.terminate()
+@@ -234,16 +236,17 @@ if __name__ == '__main__':
+     parser.add_argument('--mesh', type=str, help='Target mesh')
+     parser.add_argument('--lod', type=int, default=2000, help='Number of patches to partition')
+     parser.add_argument('--features', type=int, default=20, help='Feature vector size')
+-    parser.add_argument('--display', type=bool, default=True, help='Display the result after training')
++    parser.add_argument('--display', action='store_true', help='Show 3D viewer after training (default: skip, for headless)')
+     parser.add_argument('--batch', type=int, default=10, help='Batch size for training')
+     parser.add_argument('--fixed-seed', action='store_true', default=False, help='Fixed random seed (for debugging)')
++    parser.add_argument('--quad-timeout', type=int, default=180, help='Quadrangulation timeout in seconds (default 180 for ShapeNet)')
+ 
+     args = parser.parse_args()
+ 
+     if args.fixed_seed:
+         torch.manual_seed(0)
+ 
+-    trainer = Trainer(args.mesh, args.lod, args.features, args.batch)
++    trainer = Trainer(args.mesh, args.lod, args.features, args.batch, quad_timeout=args.quad_timeout)
+     trainer.run()
+     trainer.export()
+ 
+diff --git a/source/util/miscellaneous.py b/source/util/miscellaneous.py
+index 2c3a197..85dd11b 100644
+--- a/source/util/miscellaneous.py
++++ b/source/util/miscellaneous.py
+@@ -208,7 +208,10 @@ def arrange_views(simplified: Mesh, cameras: int, radius: float = 1.0):
+ 
+         normal = torch.cross(v1 - v0, v2 - v0, dim=-1)
+         normal = normal.mean(dim=0)
+-        normal = normal / torch.norm(normal)
++        norm = torch.norm(normal)
++        if norm < 1e-8:
++            continue  # Skip degenerate cluster (coplanar/zero-area faces)
++        normal = normal / norm
+ 
+         eye = centroid + radius * normal
+         up = torch.tensor([0, 1, 0], dtype=torch.float32, device='cuda')
+@@ -220,12 +223,16 @@ def arrange_views(simplified: Mesh, cameras: int, radius: float = 1.0):
+             up = torch.tensor([0, 0, 1], dtype=torch.float32, device='cuda')
+ 
+         right = torch.cross(look, up, dim=-1)
+-        right /= right.norm()
++        if torch.norm(right) < 1e-8:
++            continue  # Skip when look || up
++        right = right / torch.norm(right)
+ 
+         up = torch.cross(look, right, dim=-1)
+-        up /= up.norm()
++        if torch.norm(up) < 1e-8:
++            continue
++        up = up / torch.norm(up)
+ 
+-        look /= look.norm()
++        look = look / torch.norm(look)
+ 
+         view = torch.tensor([
+             [ right[0], up[0], look[0], eye[0] ],
+@@ -238,12 +245,11 @@ def arrange_views(simplified: Mesh, cameras: int, radius: float = 1.0):
+         eyes.append(eye)
+         fwds.append(look)
+ 
+-    # import polyscope as ps
+-    # ps.init()
+-    # v = torch.stack(eyes)
+-    # f = torch.stack(fwds)
+-    # ps.register_surface_mesh('ref', simplified.vertices.cpu().numpy(), simplified.faces.cpu().numpy())
+-    # ps.register_point_cloud('eyes', v.cpu()).add_vector_quantity('looks', f.cpu())
+-    # ps.show()
++    # Fallback when all clusters are degenerate (e.g. flat mesh)
++    if not views:
++        centroid = simplified.vertices.mean(dim=0)
++        eye = centroid + radius * torch.tensor([0, 0, 1], dtype=torch.float32, device='cuda')
++        view = lookat(eye, centroid, torch.tensor([0, 1, 0], dtype=torch.float32, device='cuda'))
++        return view.unsqueeze(0), eye.unsqueeze(0)
+ 
+     return torch.stack(views), torch.stack(eyes)

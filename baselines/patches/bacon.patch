@@ -1,0 +1,245 @@
+# Modifications to BACON (https://github.com/computational-imaging/bacon), commit c691c69.
+# Copyright of the original code belongs to its authors. The upstream repository has no
+# license file; this patch is distributed only so the benchmark can be reproduced from a
+# checkout of upstream. See THIRD_PARTY_NOTICES.md.
+
+diff --git a/dataio.py b/dataio.py
+index 53ad1da..6c8dd56 100644
+--- a/dataio.py
++++ b/dataio.py
+@@ -670,9 +670,9 @@ class MeshSDF(Dataset):
+         points[::2] += np.random.laplace(scale=self.coarse_scale, size=(points.shape[0]//2, points.shape[-1]))
+         points[1::2] += np.random.laplace(scale=self.fine_scale, size=(points.shape[0]//2, points.shape[-1]))
+ 
+-        # wrap around any points that are sampled out of bounds
+-        points[points > 0.5] -= 1
+-        points[points < -0.5] += 1
++        # clamp out-of-bounds points instead of wrapping (wrapping teleports
++        # points to the far side of the domain with a completely wrong SDF)
++        points = np.clip(points, -0.5, 0.5)
+ 
+         # use KDTree to get distance to surface and estimate the normal
+         sdf, idx = self.kd_tree.query(points, k=3)
+@@ -685,5 +685,13 @@ class MeshSDF(Dataset):
+     def __getitem__(self, idx):
+         coords, sdf = self.sample_surface()
+ 
++        n_uniform = self.num_samples // 4
++        uniform_pts = np.random.uniform(-0.5, 0.5, (n_uniform, 3)).astype(np.float32)
++        uniform_dist, uniform_idx = self.kd_tree.query(uniform_pts, k=1)
++        uniform_sdf = uniform_dist[..., None].astype(np.float32)
++
++        coords = np.concatenate([coords, uniform_pts], axis=0)
++        sdf = np.concatenate([sdf, uniform_sdf], axis=0)
++
+         return {'coords': torch.from_numpy(coords).float()}, \
+                {'sdf': torch.from_numpy(sdf).float()}
+diff --git a/experiments/render_sdf.py b/experiments/render_sdf.py
+index 6d33abd..5fa1574 100644
+--- a/experiments/render_sdf.py
++++ b/experiments/render_sdf.py
+@@ -13,9 +13,43 @@ import dataio
+ import math
+ 
+ 
++def count_params_per_level(model):
++    """Count cumulative learnable parameters needed to evaluate each output level.
++
++    With reuse_filters=True and hidden_layers=8, the filter reuse mapping is:
++        filter_ind_dict = [2, 2, 2, 4, 4, 6, 6, 8, 8]
++    FourierLayer weights are frozen; only biases are learnable.
++    """
++    filter_ind_dict = [2, 2, 2, 4, 4, 6, 6, 8, 8]
++    results = {}
++
++    for level in model.output_layers:
++        total = 0
++
++        used_filters = set(filter_ind_dict[:level + 1])
++        for f_idx in used_filters:
++            total += model.filters[f_idx].linear.bias.numel()
++
++        for i in range(level):
++            total += sum(p.numel() for p in model.linear[i].parameters())
++
++        total += sum(p.numel() for p in model.output_linear[level].parameters())
++
++        results[level] = total
++
++    return results
++
++
++def count_data_params(point_cloud_path):
++    """Count data parameters from an .xyz point cloud file: num_points * 3."""
++    with open(point_cloud_path, 'r') as f:
++        num_points = sum(1 for line in f if line.strip())
++    return num_points * 3
++
++
+ def export_model(ckpt_path, model_name, N=512, model_type='bacon', hidden_layers=8,
+                  hidden_size=256, output_layers=[1, 2, 4, 8],
+-                 return_sdf=False, adaptive=True):
++                 return_sdf=False, adaptive=True, point_cloud_path=None):
+ 
+     # the network has 4 output levels of detail
+     num_outputs = len(output_layers)
+@@ -36,16 +70,26 @@ def export_model(ckpt_path, model_name, N=512, model_type='bacon', hidden_layers
+     model.load_state_dict(ckpt)
+     model.cuda()
+ 
+-    if not adaptive:
+-        # extracts separate meshes for each scale
+-        generate_mesh(model, N, return_sdf, num_outputs, model_name)
++    params_per_level = count_params_per_level(model)
++    data_params = count_data_params(point_cloud_path) if point_cloud_path else None
+ 
++    print(f"  {model_name}:")
++    if data_params:
++        print(f"    Data params: {data_params:,}")
++    for layer_idx, count in params_per_level.items():
++        ratio = count / data_params if data_params else None
++        ratio_str = f"  ratio={ratio:.6f}" if ratio else ""
++        print(f"    Layer {layer_idx}: {count:,} params{ratio_str}")
++
++    if not adaptive:
++        generate_mesh(model, N, return_sdf, num_outputs, model_name,
++                      params_per_level, data_params)
+     else:
+-        # extracts single-scale output
+         generate_mesh_adaptive(model, model_name)
+ 
+ 
+-def generate_mesh(model, N, return_sdf=False, num_outputs=4, model_name='model'):
++def generate_mesh(model, N, return_sdf=False, num_outputs=4, model_name='model',
++                  params_per_level=None, data_params=None):
+ 
+     # write output
+     x = torch.linspace(-0.5, 0.5, N)
+@@ -71,15 +115,27 @@ def generate_mesh(model, N, return_sdf=False, num_outputs=4, model_name='model')
+     if return_sdf:
+         return [sdf.reshape(N, N, N) for sdf in sdf_values]
+ 
++    os.makedirs('./outputs/meshes', exist_ok=True)
++
++    level_keys = sorted(params_per_level.keys()) if params_per_level else None
+     for idx, sdf in enumerate(sdf_values):
+         sdf = sdf.reshape(N, N, N)
+         vertices, triangles = mcubes.marching_cubes(-sdf, 0)
+         mesh = trimesh.Trimesh(vertices=vertices, faces=triangles)
+         mesh.vertices = (mesh.vertices / N - 0.5) + 0.5/N
+ 
+-        os.makedirs('./outputs/meshes',  exist_ok=True)
+         mesh.export(f"./outputs/meshes/{model_name}_{idx+1}.obj")
+ 
++    if params_per_level:
++        with open(f"./outputs/meshes/{model_name}_params.txt", 'w') as f:
++            for idx, layer_idx in enumerate(level_keys):
++                model_params = params_per_level[layer_idx]
++                ratio = model_params / data_params if data_params else 0
++                f.write(f"level_{idx+1} layer_{layer_idx} "
++                        f"model_params={model_params} "
++                        f"data_params={data_params} "
++                        f"ratio={ratio:.6f}\n")
++
+ 
+ def prepare_multi_scale(res, num_scales):
+     def coord2ind(xyz_coord, res):
+@@ -173,20 +229,28 @@ def generate_mesh_adaptive(model, model_name):
+         mesh.export(f"./outputs/meshes/{model_name}.obj")
+ 
+ 
+-def export_meshes(adaptive=True):
+-    bacon_ckpts = ['../trained_models/dragon.pth',
+-                   '../trained_models/armadillo.pth',
+-                   '../trained_models/lucy.pth',
+-                   '../trained_models/thai.pth']
++def export_meshes(adaptive=True, bacon_ckpts=None, bacon_names=None, point_cloud_paths=None):
++    if bacon_ckpts is None:
++        bacon_ckpts = ['../trained_models/dragon.pth',
++                       '../trained_models/armadillo.pth',
++                       '../trained_models/lucy.pth',
++                       '../trained_models/thai.pth']
++    if bacon_names is None:
++        bacon_names = ['bacon_dragon',
++                       'bacon_armadillo',
++                       'bacon_lucy',
++                       'bacon_thai']
++    if point_cloud_paths is None:
++        point_cloud_paths = [None] * len(bacon_ckpts)
+ 
+-    bacon_names = ['bacon_dragon',
+-                   'bacon_armadillo',
+-                   'bacon_lucy',
+-                   'bacon_thai']
++    if len(bacon_ckpts) != len(bacon_names):
++        raise ValueError(f"bacon_ckpts ({len(bacon_ckpts)}) and bacon_names ({len(bacon_names)}) must have same length")
+ 
+     print('Exporting BACON')
+-    for ckpt, name in tqdm(zip(bacon_ckpts, bacon_names), total=len(bacon_ckpts)):
+-        export_model(ckpt, name, model_type='bacon', output_layers=output_layers, adaptive=adaptive)
++    for ckpt, name, pc_path in tqdm(zip(bacon_ckpts, bacon_names, point_cloud_paths),
++                                     total=len(bacon_ckpts)):
++        export_model(ckpt, name, model_type='bacon', output_layers=output_layers,
++                     adaptive=adaptive, point_cloud_path=pc_path)
+ 
+ 
+ def init_multiscale_mc():
+@@ -200,6 +264,23 @@ def init_multiscale_mc():
+ 
+ 
+ if __name__ == '__main__':
++    import argparse
++
++    parser = argparse.ArgumentParser(description='Export BACON SDF meshes')
++    parser.add_argument('--bacon-ckpts', type=str, default=None,
++                        help='Comma-separated paths to BACON checkpoints (e.g. ckpt1.pth,ckpt2.pth)')
++    parser.add_argument('--bacon-names', type=str, default=None,
++                        help='Comma-separated output names (e.g. model1,model2)')
++    parser.add_argument('--point-cloud-paths', type=str, default=None,
++                        help='Comma-separated paths to source .xyz files for param ratio calculation')
++    args = parser.parse_args()
++
++    bacon_ckpts = [p.strip() for p in args.bacon_ckpts.split(',')] if args.bacon_ckpts else None
++    bacon_names = [n.strip() for n in args.bacon_names.split(',')] if args.bacon_names else None
++    pc_paths = [p.strip() for p in args.point_cloud_paths.split(',')] if args.point_cloud_paths else None
++    if (bacon_ckpts is None) != (bacon_names is None):
++        parser.error('--bacon-ckpts and --bacon-names must be provided together')
++
+     global N, output_layers, subdiv_hashes, lowest_res, coords_list, sdf_out_list, num_outputs
+     N = 512
+     output_layers = [2, 4, 6, 8]
+@@ -207,7 +288,5 @@ if __name__ == '__main__':
+ 
+     subdiv_hashes, lowest_res, coords_list, sdf_out_list = init_multiscale_mc()
+ 
+-    # export meshes, use adaptive SDF evaluation or not
+-    # setting adaptive=False will output meshes at all resolutions
+-    # while adaptive=True while extract only a high-resolution mesh
+-    export_meshes(adaptive=True)
++    export_meshes(adaptive=False, bacon_ckpts=bacon_ckpts, bacon_names=bacon_names,
++                  point_cloud_paths=pc_paths)
+diff --git a/experiments/train_sdf.py b/experiments/train_sdf.py
+index b100ae8..7317623 100644
+--- a/experiments/train_sdf.py
++++ b/experiments/train_sdf.py
+@@ -2,6 +2,11 @@ import sys
+ import os
+ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ 
++# Pillow 10+ removed ANTIALIAS; shim for torch tensorboard compatibility
++import PIL.Image
++if not hasattr(PIL.Image, 'ANTIALIAS'):
++    PIL.Image.ANTIALIAS = PIL.Image.LANCZOS
++
+ from torch.utils.tensorboard import SummaryWriter
+ import numpy as np
+ import torch
+@@ -65,7 +70,7 @@ p.add_argument('--coarse_scale', type=float, default=1e-1,
+                help='laplacian scale factor for coarse samples')
+ p.add_argument('--fine_scale', type=float, default=1e-3,
+                help='laplacian scale factor for fine samples')
+-p.add_argument('--coarse_weight', type=float, default=1e-2,
++p.add_argument('--coarse_weight', type=float, default=0.1,
+                help='weight to apply to coarse loss samples')
+ 
+ # data i/o

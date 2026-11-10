@@ -1,0 +1,665 @@
+# Modifications to Convolutional Occupancy Networks
+# (https://github.com/autonomousvision/convolutional_occupancy_networks), commit 838bea5.
+# Copyright (c) 2020 Songyou Peng, Michael Niemeyer, Lars Mescheder, Marc Pollefeys,
+# Andreas Geiger. MIT License; a copy is in
+# third_party_licenses/convolutional_occupancy_networks.LICENSE.
+
+diff --git a/environment.yaml b/environment.yaml
+index bfc9f10..242f809 100644
+--- a/environment.yaml
++++ b/environment.yaml
+@@ -1,30 +1,28 @@
+ name: conv_onet
+ channels:
+-  - conda-forge
+   - pytorch
++  - nvidia
++  - conda-forge
+   - defaults
+ dependencies:
+-  - cython=0.29.2
+-  - imageio=2.4.1
+-  - numpy=1.15.4
+-  - numpy-base=1.15.4
+-  - matplotlib=3.0.3
+-  - matplotlib-base=3.0.3
+-  - pandas=0.23.4
+-  - pillow=5.3.0
+-  - pyembree=0.1.4
+-  - pytest=4.0.2
+-  - python=3.6.7
+-  - pytorch=1.4.0
+-  - pyyaml=3.13
+-  - scikit-image=0.14.1
+-  - scipy=1.1.0
+-  - tensorboardx=1.4
+-  - torchvision=0.2.1
+-  - tqdm=4.28.1
+-  - trimesh=2.37.7
++  - python=3.10
++  - pip
++  - cython
++  - numpy>=1.21,<2.0
++  - matplotlib
++  - pandas
++  - pillow
++  - pytest
++  - pyyaml
++  - scikit-image
++  - scipy
++  - tqdm
+   - pip:
+-    - h5py==2.9.0
+-    - plyfile==0.7
+-    - torch_scatter==2.0.4
+-
++    - torch==2.1.2
++    - torchvision==0.16.2
++    - torch-scatter
++    - tensorboardX
++    - trimesh
++    - h5py
++    - plyfile
++    - imageio
+diff --git a/scripts/download_data.sh b/scripts/download_data.sh
+index d38a77f..0fc4827 100644
+--- a/scripts/download_data.sh
++++ b/scripts/download_data.sh
+@@ -1,7 +1,33 @@
+ #!/bin/bash
++# Download and extract ShapeNet data
++# Usage: ./download_data.sh [category]
++# Example: ./download_data.sh 03001627  (for chairs only)
++# If no category specified, extracts all data
++
++CATEGORY=${1:-""}
++
+ mkdir -p data
+ cd data
+-echo "Start downloading ..."
+-wget https://s3.eu-central-1.amazonaws.com/avg-projects/convolutional_occupancy_networks/data/synthetic_room_dataset.zip
+-unzip synthetic_room_dataset.zip
+-echo "Done!"
+\ No newline at end of file
++
++# Download if not already present
++if [ ! -f "dataset_small_v1.1.zip" ]; then
++    echo "Downloading dataset..."
++    wget https://s3.eu-central-1.amazonaws.com/avg-projects/occupancy_networks/data/dataset_small_v1.1.zip
++fi
++
++# Extract data
++if [ -n "$CATEGORY" ]; then
++    echo "Extracting only category: $CATEGORY"
++    # Extract only the specified category + metadata
++    unzip -o dataset_small_v1.1.zip "ShapeNet/$CATEGORY/*" "metadata.yaml"
++else
++    echo "Extracting all categories..."
++    unzip -o dataset_small_v1.1.zip
++fi
++
++# Copy metadata if needed
++if [ ! -f "ShapeNet/metadata.yaml" ] && [ -f "metadata.yaml" ]; then
++    cp metadata.yaml ShapeNet/metadata.yaml
++fi
++
++echo "Done! Data extracted to data/ShapeNet/"
+\ No newline at end of file
+diff --git a/setup.py b/setup.py
+index 19bb919..727bc09 100644
+--- a/setup.py
++++ b/setup.py
+@@ -2,28 +2,20 @@ try:
+     from setuptools import setup
+ except ImportError:
+     from distutils.core import setup
++from setuptools.command.build_ext import build_ext
+ from distutils.extension import Extension
+ from Cython.Build import cythonize
+-from torch.utils.cpp_extension import BuildExtension, CppExtension, CUDAExtension
+ import numpy
+-
++import os
+ 
+ # Get the numpy include directory.
+ numpy_include_dir = numpy.get_include()
+ 
++# Define NPY_NO_DEPRECATED_API to silence NumPy deprecation warnings
++define_macros = [('NPY_NO_DEPRECATED_API', 'NPY_1_7_API_VERSION')]
++
+ # Extensions
+-# pykdtree (kd tree)
+-pykdtree = Extension(
+-    'src.utils.libkdtree.pykdtree.kdtree',
+-    sources=[
+-        'src/utils/libkdtree/pykdtree/kdtree.c',
+-        'src/utils/libkdtree/pykdtree/_kdtree_core.c'
+-    ],
+-    language='c',
+-    extra_compile_args=['-std=c99', '-O3', '-fopenmp'],
+-    extra_link_args=['-lgomp'],
+-    include_dirs=[numpy_include_dir]
+-)
++# NOTE: pykdtree is now installed via pip instead of building locally
+ 
+ # mcubes (marching cubes algorithm)
+ mcubes_module = Extension(
+@@ -34,8 +26,9 @@ mcubes_module = Extension(
+         'src/utils/libmcubes/marchingcubes.cpp'
+     ],
+     language='c++',
+-    extra_compile_args=['-std=c++11'],
+-    include_dirs=[numpy_include_dir]
++    extra_compile_args=['-std=c++14', '-O3'],
++    include_dirs=[numpy_include_dir],
++    define_macros=define_macros
+ )
+ 
+ # triangle hash (efficient mesh intersection)
+@@ -45,7 +38,8 @@ triangle_hash_module = Extension(
+         'src/utils/libmesh/triangle_hash.pyx'
+     ],
+     libraries=['m'],  # Unix-like specific
+-    include_dirs=[numpy_include_dir]
++    include_dirs=[numpy_include_dir],
++    define_macros=define_macros
+ )
+ 
+ # mise (efficient mesh extraction)
+@@ -54,6 +48,8 @@ mise_module = Extension(
+     sources=[
+         'src/utils/libmise/mise.pyx'
+     ],
++    include_dirs=[numpy_include_dir],
++    define_macros=define_macros
+ )
+ 
+ # simplify (efficient mesh simplification)
+@@ -62,7 +58,8 @@ simplify_mesh_module = Extension(
+     sources=[
+         'src/utils/libsimplify/simplify_mesh.pyx'
+     ],
+-    include_dirs=[numpy_include_dir]
++    include_dirs=[numpy_include_dir],
++    define_macros=define_macros
+ )
+ 
+ # voxelization (efficient mesh voxelization)
+@@ -71,12 +68,13 @@ voxelize_module = Extension(
+     sources=[
+         'src/utils/libvoxelize/voxelize.pyx'
+     ],
+-    libraries=['m']  # Unix-like specific
++    libraries=['m'],  # Unix-like specific
++    include_dirs=[numpy_include_dir],
++    define_macros=define_macros
+ )
+ 
+ # Gather all extension modules
+ ext_modules = [
+-    pykdtree,
+     mcubes_module,
+     triangle_hash_module,
+     mise_module,
+@@ -85,8 +83,8 @@ ext_modules = [
+ ]
+ 
+ setup(
+-    ext_modules=cythonize(ext_modules),
++    ext_modules=cythonize(ext_modules, compiler_directives={'language_level': '3'}),
+     cmdclass={
+-        'build_ext': BuildExtension
++        'build_ext': build_ext
+     }
+ )
+diff --git a/src/common.py b/src/common.py
+index 21f0ede..ea37c7f 100755
+--- a/src/common.py
++++ b/src/common.py
+@@ -90,13 +90,13 @@ def chamfer_distance_kdtree(points1, points2, give_id=False):
+ 
+     # Get list of nearest neighbors indieces
+     idx_nn_12, _ = get_nearest_neighbors_indices_batch(points1_np, points2_np)
+-    idx_nn_12 = torch.LongTensor(idx_nn_12).to(points1.device)
++    idx_nn_12 = torch.tensor(idx_nn_12, dtype=torch.long, device=points1.device)
+     # Expands it as batch_size x 1 x 3
+     idx_nn_12_expand = idx_nn_12.view(batch_size, -1, 1).expand_as(points1)
+ 
+     # Get list of nearest neighbors indieces
+     idx_nn_21, _ = get_nearest_neighbors_indices_batch(points2_np, points1_np)
+-    idx_nn_21 = torch.LongTensor(idx_nn_21).to(points1.device)
++    idx_nn_21 = torch.tensor(idx_nn_21, dtype=torch.long, device=points1.device)
+     # Expands it as batch_size x T x 3
+     idx_nn_21_expand = idx_nn_21.view(batch_size, -1, 1).expand_as(points2)
+ 
+@@ -194,7 +194,8 @@ def b_inv(b_mat):
+     '''
+ 
+     eye = b_mat.new_ones(b_mat.size(-1)).diag().expand_as(b_mat)
+-    b_inv, _ = torch.gesv(eye, b_mat)
++    # torch.gesv was removed in PyTorch 1.9+, use torch.linalg.solve instead
++    b_inv = torch.linalg.solve(b_mat, eye)
+     return b_inv
+ 
+ def project_to_camera(points, transform):
+diff --git a/src/config.py b/src/config.py
+index f8347a8..deee5f1 100644
+--- a/src/config.py
++++ b/src/config.py
+@@ -19,7 +19,7 @@ def load_config(path, default_path=None):
+     '''
+     # Load configuration from file itself
+     with open(path, 'r') as f:
+-        cfg_special = yaml.load(f)
++        cfg_special = yaml.safe_load(f)
+ 
+     # Check if we should inherit from a config
+     inherit_from = cfg_special.get('inherit_from')
+@@ -30,7 +30,7 @@ def load_config(path, default_path=None):
+         cfg = load_config(inherit_from, default_path)
+     elif default_path is not None:
+         with open(default_path, 'r') as f:
+-            cfg = yaml.load(f)
++            cfg = yaml.safe_load(f)
+     else:
+         cfg = dict()
+ 
+diff --git a/src/conv_onet/generation.py b/src/conv_onet/generation.py
+index 2da6e0d..9454d04 100644
+--- a/src/conv_onet/generation.py
++++ b/src/conv_onet/generation.py
+@@ -129,7 +129,7 @@ class Generator3D(object):
+                 pointsf = points / mesh_extractor.resolution
+                 # Normalize to bounding box
+                 pointsf = box_size * (pointsf - 0.5)
+-                pointsf = torch.FloatTensor(pointsf).to(self.device)
++                pointsf = torch.tensor(pointsf, dtype=torch.float32, device=self.device)
+                 # Evaluate model and update
+                 values = self.eval_points(pointsf, c, **kwargs).cpu().numpy()
+                 values = values.astype(np.float64)
+@@ -432,7 +432,7 @@ class Generator3D(object):
+             c (tensor): encoded feature volumes
+         '''
+         device = self.device
+-        vertices = torch.FloatTensor(vertices)
++        vertices = torch.tensor(vertices, dtype=torch.float32)
+         vertices_split = torch.split(vertices, self.points_batch_size)
+ 
+         normals = []
+@@ -469,11 +469,11 @@ class Generator3D(object):
+         threshold = self.threshold
+ 
+         # Vertex parameter
+-        v0 = torch.FloatTensor(mesh.vertices).to(self.device)
++        v0 = torch.tensor(mesh.vertices, dtype=torch.float32, device=self.device)
+         v = torch.nn.Parameter(v0.clone())
+ 
+         # Faces of mesh
+-        faces = torch.LongTensor(mesh.faces).to(self.device)
++        faces = torch.tensor(mesh.faces, dtype=torch.long, device=self.device)
+ 
+         # Start optimization
+         optimizer = optim.RMSprop([v], lr=1e-4)
+@@ -484,7 +484,7 @@ class Generator3D(object):
+             # Loss
+             face_vertex = v[faces]
+             eps = np.random.dirichlet((0.5, 0.5, 0.5), size=faces.shape[0])
+-            eps = torch.FloatTensor(eps).to(self.device)
++            eps = torch.tensor(eps, dtype=torch.float32, device=self.device)
+             face_point = (face_vertex * eps[:, :, None]).sum(dim=1)
+ 
+             face_v1 = face_vertex[:, 1, :] - face_vertex[:, 0, :]
+diff --git a/src/data/core.py b/src/data/core.py
+index bcd3747..b72d7cb 100644
+--- a/src/data/core.py
++++ b/src/data/core.py
+@@ -68,7 +68,7 @@ class Shapes3dDataset(data.Dataset):
+ 
+         if os.path.exists(metadata_file):
+             with open(metadata_file, 'r') as f:
+-                self.metadata = yaml.load(f)
++                self.metadata = yaml.safe_load(f)
+         else:
+             self.metadata = {
+                 c: {'id': c, 'name': 'n/a'} for c in categories
+@@ -99,7 +99,7 @@ class Shapes3dDataset(data.Dataset):
+                     models_c.remove('')
+ 
+                 self.models += [
+-                    {'category': c, 'model': m}
++                    {'category': c, 'model': m.split('/')[-1] if '/' in m else m}
+                     for m in models_c
+                 ]
+         
+@@ -254,6 +254,16 @@ def collate_remove_none(batch):
+     '''
+ 
+     batch = list(filter(lambda x: x is not None, batch))
++    if len(batch) == 0:
++        raise RuntimeError(
++            'collate_remove_none: empty batch (every sample returned None). '
++            'Dataset __getitem__ failed for all items in this batch—usually '
++            'missing files under each model folder. For input_type=pointcloud '
++            'you need points.npz (points + occupancies) and pointcloud.npz '
++            '(points + normals) next to the mesh. Raw ShapeNet OBJ-only trees '
++            'are not enough; use the Occupancy Networks preprocessed data or '
++            'run scripts/preprocess_shapenet_obj_to_npz.py.'
++        )
+     return data.dataloader.default_collate(batch)
+ 
+ 
+diff --git a/src/encoder/unet.py b/src/encoder/unet.py
+index d4e1aa5..f274fe5 100644
+--- a/src/encoder/unet.py
++++ b/src/encoder/unet.py
+@@ -249,7 +249,7 @@ if __name__ == "__main__":
+     reso = 176
+     x = np.zeros((1, 1, reso, reso))
+     x[:,:,int(reso/2-1), int(reso/2-1)] = np.nan
+-    x = torch.FloatTensor(x)
++    x = torch.tensor(x, dtype=torch.float32)
+ 
+     out = model(x)
+     print('%f'%(torch.sum(torch.isnan(out)).detach().cpu().numpy()/(reso*reso)))
+diff --git a/src/encoder/unet3d.py b/src/encoder/unet3d.py
+index 1d43f52..8d0c367 100644
+--- a/src/encoder/unet3d.py
++++ b/src/encoder/unet3d.py
+@@ -93,7 +93,7 @@ class SingleConv(nn.Sequential):
+         num_groups (int): number of groups for the GroupNorm
+     """
+ 
+-    def __init__(self, in_channels, out_channels, kernel_size=3, order='crg', num_groups=8, padding=1):
++    def __init__(self, in_channels, out_channels, kernel_size=3, order='crg', num_groups=4, padding=1):
+         super(SingleConv, self).__init__()
+ 
+         for name, module in create_conv(in_channels, out_channels, kernel_size, order, num_groups, padding=padding):
+@@ -122,7 +122,7 @@ class DoubleConv(nn.Sequential):
+         num_groups (int): number of groups for the GroupNorm
+     """
+ 
+-    def __init__(self, in_channels, out_channels, encoder, kernel_size=3, order='crg', num_groups=8):
++    def __init__(self, in_channels, out_channels, encoder, kernel_size=3, order='crg', num_groups=4):
+         super(DoubleConv, self).__init__()
+         if encoder:
+             # we're in the encoder path
+@@ -155,7 +155,7 @@ class ExtResNetBlock(nn.Module):
+     Notice we use ELU instead of ReLU (order='cge') and put non-linearity after the groupnorm.
+     """
+ 
+-    def __init__(self, in_channels, out_channels, kernel_size=3, order='cge', num_groups=8, **kwargs):
++    def __init__(self, in_channels, out_channels, kernel_size=3, order='cge', num_groups=4, **kwargs):
+         super(ExtResNetBlock, self).__init__()
+ 
+         # first convolution
+@@ -214,7 +214,7 @@ class Encoder(nn.Module):
+ 
+     def __init__(self, in_channels, out_channels, conv_kernel_size=3, apply_pooling=True,
+                  pool_kernel_size=(2, 2, 2), pool_type='max', basic_module=DoubleConv, conv_layer_order='crg',
+-                 num_groups=8):
++                 num_groups=4):
+         super(Encoder, self).__init__()
+         assert pool_type in ['max', 'avg']
+         if apply_pooling:
+@@ -256,7 +256,7 @@ class Decoder(nn.Module):
+     """
+ 
+     def __init__(self, in_channels, out_channels, kernel_size=3, scale_factor=(2, 2, 2), basic_module=DoubleConv,
+-                 conv_layer_order='crg', num_groups=8, mode='nearest'):
++                 conv_layer_order='crg', num_groups=4, mode='nearest'):
+         super(Decoder, self).__init__()
+         if basic_module == DoubleConv:
+             # if DoubleConv is the basic_module use interpolation for upsampling and concatenation joining
+@@ -348,7 +348,7 @@ class FinalConv(nn.Sequential):
+         num_groups (int): number of groups for the GroupNorm
+     """
+ 
+-    def __init__(self, in_channels, out_channels, kernel_size=3, order='crg', num_groups=8):
++    def __init__(self, in_channels, out_channels, kernel_size=3, order='crg', num_groups=4):
+         super(FinalConv, self).__init__()
+ 
+         # conv1
+@@ -391,7 +391,7 @@ class Abstract3DUNet(nn.Module):
+     """
+ 
+     def __init__(self, in_channels, out_channels, final_sigmoid, basic_module, f_maps=64, layer_order='gcr',
+-                 num_groups=8, num_levels=4, is_segmentation=False, testing=False, **kwargs):
++                 num_groups=4, num_levels=4, is_segmentation=False, testing=False, **kwargs):
+         super(Abstract3DUNet, self).__init__()
+ 
+         self.testing = testing
+@@ -484,7 +484,7 @@ class UNet3D(Abstract3DUNet):
+     """
+ 
+     def __init__(self, in_channels, out_channels, final_sigmoid=True, f_maps=64, layer_order='gcr',
+-                 num_groups=8, num_levels=4, is_segmentation=True, **kwargs):
++                 num_groups=4, num_levels=4, is_segmentation=True, **kwargs):
+         super(UNet3D, self).__init__(in_channels=in_channels, out_channels=out_channels, final_sigmoid=final_sigmoid,
+                                      basic_module=DoubleConv, f_maps=f_maps, layer_order=layer_order,
+                                      num_groups=num_groups, num_levels=num_levels, is_segmentation=is_segmentation,
+@@ -500,7 +500,7 @@ class ResidualUNet3D(Abstract3DUNet):
+     """
+ 
+     def __init__(self, in_channels, out_channels, final_sigmoid=True, f_maps=64, layer_order='gcr',
+-                 num_groups=8, num_levels=5, is_segmentation=True, **kwargs):
++                 num_groups=4, num_levels=5, is_segmentation=True, **kwargs):
+         super(ResidualUNet3D, self).__init__(in_channels=in_channels, out_channels=out_channels,
+                                              final_sigmoid=final_sigmoid,
+                                              basic_module=ExtResNetBlock, f_maps=f_maps, layer_order=layer_order,
+@@ -538,7 +538,7 @@ if __name__ == "__main__":
+     import torch
+     x = np.zeros((1, 1, reso, reso, reso))
+     x[:,:, int(reso/2-1), int(reso/2-1), int(reso/2-1)] = np.nan
+-    x = torch.FloatTensor(x)
++    x = torch.tensor(x, dtype=torch.float32)
+ 
+     out = model(x)
+     print('%f'%(torch.sum(torch.isnan(out)).detach().cpu().numpy()/(reso*reso*reso)))
+diff --git a/src/utils/binvox_rw.py b/src/utils/binvox_rw.py
+index c9c11d6..050034e 100644
+--- a/src/utils/binvox_rw.py
++++ b/src/utils/binvox_rw.py
+@@ -142,7 +142,7 @@ def read_as_3d_array(fp, fix_coords=True):
+     # j -> y
+     # k -> z
+     values, counts = raw_data[::2], raw_data[1::2]
+-    data = np.repeat(values, counts).astype(np.bool)
++    data = np.repeat(values, counts).astype(bool)
+     data = data.reshape(dims)
+     if fix_coords:
+         # xzy to xyz TODO the right thing
+@@ -177,7 +177,7 @@ def read_as_coord_array(fp, fix_coords=True):
+     end_indices = np.cumsum(counts)
+     indices = np.concatenate(([0], end_indices[:-1])).astype(end_indices.dtype)
+ 
+-    values = values.astype(np.bool)
++    values = values.astype(bool)
+     indices = indices[values]
+     end_indices = end_indices[values]
+ 
+@@ -203,7 +203,7 @@ def read_as_coord_array(fp, fix_coords=True):
+     #return Voxels(data, dims, translate, scale, axis_order)
+     return Voxels(np.ascontiguousarray(data), dims, translate, scale, axis_order)
+ 
+-def dense_to_sparse(voxel_data, dtype=np.int):
++def dense_to_sparse(voxel_data, dtype=np.int64):
+     """ From dense representation to sparse (coordinate) representation.
+     No coordinate reordering.
+     """
+@@ -211,14 +211,14 @@ def dense_to_sparse(voxel_data, dtype=np.int):
+         raise ValueError('voxel_data is wrong shape; should be 3D array.')
+     return np.asarray(np.nonzero(voxel_data), dtype)
+ 
+-def sparse_to_dense(voxel_data, dims, dtype=np.bool):
++def sparse_to_dense(voxel_data, dims, dtype=np.bool_):
+     if voxel_data.ndim!=2 or voxel_data.shape[0]!=3:
+         raise ValueError('voxel_data is wrong shape; should be 3xN array.')
+     if np.isscalar(dims):
+         dims = [dims]*3
+     dims = np.atleast_2d(dims).T
+     # truncate to integers
+-    xyz = voxel_data.astype(np.int)
++    xyz = voxel_data.astype(int)
+     # discard voxels that fall outside dims
+     valid_ix = ~np.any((xyz < 0) | (xyz >= dims), 0)
+     xyz = xyz[:,valid_ix]
+diff --git a/src/utils/libkdtree/__init__.py b/src/utils/libkdtree/__init__.py
+index cbd34df..74f88ea 100644
+--- a/src/utils/libkdtree/__init__.py
++++ b/src/utils/libkdtree/__init__.py
+@@ -1,4 +1,8 @@
+-from .pykdtree.kdtree import KDTree
++# Use pip-installed pykdtree instead of local build
++try:
++    from pykdtree.kdtree import KDTree
++except ImportError:
++    from .pykdtree.kdtree import KDTree
+ 
+ 
+ __all__ = [
+diff --git a/src/utils/libmcubes/__init__.py b/src/utils/libmcubes/__init__.py
+index 85e442b..0db359d 100644
+--- a/src/utils/libmcubes/__init__.py
++++ b/src/utils/libmcubes/__init__.py
+@@ -1,6 +1,15 @@
+-from src.utils.libmcubes.mcubes import (
+-    marching_cubes, marching_cubes_func
+-)
++# Try pip-installed mcubes first, fall back to local build
++try:
++    import mcubes
++    marching_cubes = mcubes.marching_cubes
++    # marching_cubes_func not available in pip mcubes, create a stub
++    def marching_cubes_func(*args, **kwargs):
++        raise NotImplementedError("marching_cubes_func not available with pip mcubes")
++except ImportError:
++    from src.utils.libmcubes.mcubes import (
++        marching_cubes, marching_cubes_func
++    )
++
+ from src.utils.libmcubes.exporter import (
+     export_mesh, export_obj, export_off
+ )
+diff --git a/src/utils/libmcubes/pywrapper.cpp b/src/utils/libmcubes/pywrapper.cpp
+index b411624..253eb5e 100644
+--- a/src/utils/libmcubes/pywrapper.cpp
++++ b/src/utils/libmcubes/pywrapper.cpp
+@@ -60,8 +60,8 @@ PyObject* marching_cubes_func(PyObject* lower, PyObject* upper,
+     // Copy the result to two Python ndarrays.
+     npy_intp size_vertices = vertices.size();
+     npy_intp size_polygons = polygons.size();
+-    PyArrayObject* verticesarr = reinterpret_cast<PyArrayObject*>(PyArray_SimpleNew(1, &size_vertices, PyArray_DOUBLE));
+-    PyArrayObject* polygonsarr = reinterpret_cast<PyArrayObject*>(PyArray_SimpleNew(1, &size_polygons, PyArray_ULONG));
++    PyArrayObject* verticesarr = reinterpret_cast<PyArrayObject*>(PyArray_SimpleNew(1, &size_vertices, NPY_DOUBLE));
++    PyArrayObject* polygonsarr = reinterpret_cast<PyArrayObject*>(PyArray_SimpleNew(1, &size_polygons, NPY_ULONG));
+     
+     std::vector<double>::const_iterator it = vertices.begin();
+     for(int i=0; it!=vertices.end(); ++i, ++it)
+@@ -109,8 +109,8 @@ PyObject* marching_cubes(PyArrayObject* arr, double isovalue)
+     // Copy the result to two Python ndarrays.
+     npy_intp size_vertices = vertices.size();
+     npy_intp size_polygons = polygons.size();
+-    PyArrayObject* verticesarr = reinterpret_cast<PyArrayObject*>(PyArray_SimpleNew(1, &size_vertices, PyArray_DOUBLE));
+-    PyArrayObject* polygonsarr = reinterpret_cast<PyArrayObject*>(PyArray_SimpleNew(1, &size_polygons, PyArray_ULONG));
++    PyArrayObject* verticesarr = reinterpret_cast<PyArrayObject*>(PyArray_SimpleNew(1, &size_vertices, NPY_DOUBLE));
++    PyArrayObject* polygonsarr = reinterpret_cast<PyArrayObject*>(PyArray_SimpleNew(1, &size_polygons, NPY_ULONG));
+     
+     std::vector<double>::const_iterator it = vertices.begin();
+     for(int i=0; it!=vertices.end(); ++i, ++it)
+@@ -148,8 +148,8 @@ PyObject* marching_cubes2(PyArrayObject* arr, double isovalue)
+     // Copy the result to two Python ndarrays.
+     npy_intp size_vertices = vertices.size();
+     npy_intp size_polygons = polygons.size();
+-    PyArrayObject* verticesarr = reinterpret_cast<PyArrayObject*>(PyArray_SimpleNew(1, &size_vertices, PyArray_DOUBLE));
+-    PyArrayObject* polygonsarr = reinterpret_cast<PyArrayObject*>(PyArray_SimpleNew(1, &size_polygons, PyArray_ULONG));
++    PyArrayObject* verticesarr = reinterpret_cast<PyArrayObject*>(PyArray_SimpleNew(1, &size_vertices, NPY_DOUBLE));
++    PyArrayObject* polygonsarr = reinterpret_cast<PyArrayObject*>(PyArray_SimpleNew(1, &size_polygons, NPY_ULONG));
+ 
+     std::vector<double>::const_iterator it = vertices.begin();
+     for(int i=0; it!=vertices.end(); ++i, ++it)
+@@ -187,8 +187,8 @@ PyObject* marching_cubes3(PyArrayObject* arr, double isovalue)
+     // Copy the result to two Python ndarrays.
+     npy_intp size_vertices = vertices.size();
+     npy_intp size_polygons = polygons.size();
+-    PyArrayObject* verticesarr = reinterpret_cast<PyArrayObject*>(PyArray_SimpleNew(1, &size_vertices, PyArray_DOUBLE));
+-    PyArrayObject* polygonsarr = reinterpret_cast<PyArrayObject*>(PyArray_SimpleNew(1, &size_polygons, PyArray_ULONG));
++    PyArrayObject* verticesarr = reinterpret_cast<PyArrayObject*>(PyArray_SimpleNew(1, &size_vertices, NPY_DOUBLE));
++    PyArrayObject* polygonsarr = reinterpret_cast<PyArrayObject*>(PyArray_SimpleNew(1, &size_polygons, NPY_ULONG));
+ 
+     std::vector<double>::const_iterator it = vertices.begin();
+     for(int i=0; it!=vertices.end(); ++i, ++it)
+diff --git a/src/utils/libmesh/inside_mesh.py b/src/utils/libmesh/inside_mesh.py
+index 29f6229..50fc4db 100644
+--- a/src/utils/libmesh/inside_mesh.py
++++ b/src/utils/libmesh/inside_mesh.py
+@@ -33,7 +33,7 @@ class MeshIntersector:
+         points = self.rescale(points)
+ 
+         # placeholder result with no hits we'll fill in later
+-        contains = np.zeros(len(points), dtype=np.bool)
++        contains = np.zeros(len(points), dtype=bool)
+ 
+         # cull points outside of the axis aligned bounding box
+         # this avoids running ray tests unless points are close
+@@ -127,7 +127,7 @@ class TriangleIntersector2d:
+         return point_indices, tri_indices
+ 
+     def check_triangles(self, points, triangles):
+-        contains = np.zeros(points.shape[0], dtype=np.bool)
++        contains = np.zeros(points.shape[0], dtype=bool)
+         A = triangles[:, :2] - triangles[:, 2:]
+         A = A.transpose([0, 2, 1])
+         y = points - triangles[:, 2]
+diff --git a/src/utils/voxels.py b/src/utils/voxels.py
+index bcb2ba6..6a17518 100644
+--- a/src/utils/voxels.py
++++ b/src/utils/voxels.py
+@@ -11,7 +11,7 @@ from src.common import make_3d_grid
+ class VoxelGrid:
+     def __init__(self, data, loc=(0., 0., 0.), scale=1):
+         assert(data.shape[0] == data.shape[1] == data.shape[2])
+-        data = np.asarray(data, dtype=np.bool)
++        data = np.asarray(data, dtype=bool)
+         loc = np.asarray(loc)
+         self.data = data
+         self.loc = loc
+@@ -196,7 +196,7 @@ class VoxelGrid:
+         i3 = i3[mask]
+ 
+         # Compute values, default value outside box is 0
+-        occ = np.zeros(points.shape[:-1], dtype=np.bool)
++        occ = np.zeros(points.shape[:-1], dtype=bool)
+         occ[mask] = self.data[i1, i2, i3]
+ 
+         return occ
+diff --git a/train.py b/train.py
+index 863c892..65e4cad 100755
+--- a/train.py
++++ b/train.py
+@@ -7,6 +7,7 @@ import argparse
+ import time, datetime
+ import matplotlib; matplotlib.use('Agg')
+ from src import config, data
++from src.param_count import non_shared_latent_param_count
+ from src.checkpoints import CheckpointIO
+ from collections import defaultdict
+ import shutil
+@@ -124,9 +125,16 @@ checkpoint_every = cfg['training']['checkpoint_every']
+ validate_every = cfg['training']['validate_every']
+ visualize_every = cfg['training']['visualize_every']
+ 
+-# Print model
++# Print model (shared weights vs per-mesh latent size — see src/param_count.py)
++try:
++    n_non_shared = non_shared_latent_param_count(cfg)
++    print(
++        'Non-shared latent size (per mesh, feature grid/planes): %d' % n_non_shared
++    )
++except Exception as ex:
++    print('Non-shared latent size: (not applicable) %s' % ex)
+ nparameters = sum(p.numel() for p in model.parameters())
+-print('Total number of parameters: %d' % nparameters)
++print('Total trainable parameters (full model, incl. shared): %d' % nparameters)
+ 
+ print('output path: ', cfg['training']['out_dir'])
+ 

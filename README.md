@@ -43,6 +43,18 @@ Then, we follow by training with suffix dropout with a sampled number of kept to
 python trainer/train_vocabulary.py --config-name shapenet-v2 max_epoch=2000 val_check_interval=10 only_chairs=true batch_size=8 gradient_accumulation_steps=8 num_val_samples=4 use_sequence_distillation=true num_sequence_tokens=256 use_nested_dropout=true nested_dropout_size_sampling=uniform n_encoder_self_attn_blocks=8 encoder_zero_init=false encoder_use_rope=true query_binding=rope use_causal_attention=true distill_before_vq=true n_decoder_self_attn_blocks=8 use_order_preserving_ae=true encoder_use_pos_embed=true freeze_base=true ae_only_loss=false code_cls_weight=1.0 ae_recon_weight=1.0 ae_warmup_steps=0 dataset_root=data/shapenet/processed_data_clean.pkl vq_resume=runs/<stage 1 run>/checkpoints/1999-0.ckpt
 ```
 
+## Baselines
+
+The baseline experiments (Instant-NGP, NGF, BACON, Convolutional Occupancy Networks and the original MeshGPT) are in [`baselines/`](baselines/README.md). That folder clones each baseline at a pinned commit, applies our patches, runs the capacity sweeps, and scores every method with the same Chamfer distance and compression-ratio code. All measured distances are committed, so the rate-distortion figures can be redrawn without retraining:
+
+```bash
+cd baselines
+conda env create -f envs/distance.yml && conda activate distance
+python graphs/graph_paper_figures.py
+```
+
+See [`baselines/README.md`](baselines/README.md) for the full pipeline and [`baselines/docs/`](baselines/docs/README.md) for per-method guides.
+
 ### License
 
 `meshgpt/` is derived from MeshGPT and is distributed under the MeshGPT license in `meshgpt/LICENSE`.

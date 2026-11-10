@@ -1,0 +1,436 @@
+# Modifications to MeshGPT (https://github.com/audi/MeshGPT), commit 028648f.
+#
+# These modifications are derived from the MeshGPT source code provided by Audi AG
+# (the Contributor), and are distributed under the same license:
+#
+#   Copyright (c) 2024, Audi AG, ai-licenses@audi.de. All rights reserved.
+#   This Source Code Form is subject to the terms of the Automotive Development Public
+#   Non-Commercial License, v. 1.0 (ADPNCL). A copy is in
+#   third_party_licenses/MeshGPT.LICENSE.
+#
+# This file documents the differences between the original and the modified code
+# (ADPNCL section 3.4). Modifications created April 2026 (config/meshgpt.yaml,
+# trainer/__init__.py, trainer/train_transformer.py, trainer/train_vocabulary.py:
+# 2026-04-21; inference/infer_meshgpt.py: 2026-04-17). Summary of changes: see
+# docs/meshgpt_original.md.
+
+diff --git a/config/meshgpt.yaml b/config/meshgpt.yaml
+index c66853c..4371a85 100644
+--- a/config/meshgpt.yaml
++++ b/config/meshgpt.yaml
+@@ -1,5 +1,6 @@
+ # data
+ dataset: 'shapenet'
++eval_only: true
+ dataset_root: 'data/shapenet/processed_data.pkl'
+ # not actually number of tokens, but the quantization resolution + 3
+ num_tokens: 131
+@@ -23,7 +24,7 @@ save_epoch: 1  # save every n epoch
+ sanity_steps: 1  # sanity steps before the run
+ val_check_percent: 1.0  # check this proportion of val set when evaluation runs
+ val_check_interval: 1  # run evaluation every x% of the train set steps
+-resume: null  # resume from a checkpoint
++resume: "pretrained/vocabulary/checkpoints/749-0.ckpt"  # resume from a checkpoint
+ num_workers: 24 
+ logger: wandb
+ overfit: False  # overfitting dataloaders
+@@ -81,7 +82,7 @@ grad_clip: 1.0 # clip gradients at this value, or disable if == 0.0
+ warmup_steps: 2000 # how many steps to warm up for
+ min_lr: 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
+ 
+-only_chairs: False
++only_chairs: True
+ stochasticity: 0.1
+ 
+ hydra:
+diff --git a/inference/infer_meshgpt.py b/inference/infer_meshgpt.py
+index e91386a..30ecbcf 100644
+--- a/inference/infer_meshgpt.py
++++ b/inference/infer_meshgpt.py
+@@ -95,4 +95,4 @@ if __name__ == "__main__":
+     cfg.top_p = 0.95
+     cfg.temperature = 1.0
+     cfg.low_augment = True
+-    main(cfg, sys.argv[2])
++    main(cfg, sys.argv[2])
+\ No newline at end of file
+diff --git a/trainer/__init__.py b/trainer/__init__.py
+index e15acc9..e3074eb 100644
+--- a/trainer/__init__.py
++++ b/trainer/__init__.py
+@@ -86,7 +86,9 @@ def create_trainer(name, config):
+ 
+     checkpoint_callback = ModelCheckpoint(
+         dirpath=(Path("runs") / config.experiment / "checkpoints"),
+-        save_top_k=-1,
++        save_top_k=3,
++        monitor="epoch",
++        mode="max",
+         verbose=False,
+         every_n_epochs=config.save_epoch,
+         filename='{epoch:02d}-{global_step}',
+diff --git a/trainer/train_transformer.py b/trainer/train_transformer.py
+index acff2b1..165b8bf 100644
+--- a/trainer/train_transformer.py
++++ b/trainer/train_transformer.py
+@@ -1,5 +1,7 @@
+-import random
++import re
++import sys
+ 
++import numpy as np
+ import omegaconf
+ import trimesh
+ from cosine_annealing_warmup import CosineAnnealingWarmupRestarts
+@@ -8,16 +10,35 @@ import hydra
+ from easydict import EasyDict
+ from lightning_utilities.core.rank_zero import rank_zero_only
+ from pathlib import Path
++from tqdm import tqdm
+ import torch
++from pytorch3d.loss import chamfer_distance
++from pytorch3d.structures import Meshes
++from pytorch3d.ops import sample_points_from_meshes
++
++_REPO_ROOT = Path(__file__).resolve().parents[1]
++if str(_REPO_ROOT) not in sys.path:
++    sys.path.insert(0, str(_REPO_ROOT))
+ 
+ from dataset.quantized_soup import QuantizedSoupTripletsCreator
+ from dataset.triangles import TriangleNodesWithFacesAndSequenceIndices, TriangleNodesWithFacesDataloader
+ from model.transformer import QuantSoupTransformer
+ from trainer import create_trainer, step, get_rvqvae_v0_decoder
+-from util.misc import accuracy
++from util.misc import accuracy, normalize_vertices
+ from util.visualization import plot_vertices_and_faces
+ from util.misc import get_parameters_from_state_dict
+ 
++MODELS_TEST_HOME = Path(__file__).resolve().parents[3]
++GT_ROOT = MODELS_TEST_HOME / "data" / "shapenet"
++CHAMFER_DIR = MODELS_TEST_HOME / "Distances" / "MeshGPT_orig"
++
++
++def synset_and_canonical_shape_id(dataset_name: str) -> tuple[str, str]:
++    """ShapeNet ``<synset>_<hash>[_augsuffix]`` -> (synset, canonical shape id)."""
++    synset, rest = dataset_name.split("_", 1)
++    shape_id = re.sub(r"_((ang|dec)\d+)$", "", rest, flags=re.IGNORECASE)
++    return synset, shape_id
++
+ 
+ class QuantSoupModelTrainer(pl.LightningModule):
+ 
+@@ -91,28 +112,80 @@ class QuantSoupModelTrainer(pl.LightningModule):
+     @rank_zero_only
+     def on_validation_epoch_end(self):
+         decoder = get_rvqvae_v0_decoder(self.vq_cfg, self.config.vq_resume, self.device)
+-        for k in range(self.config.num_val_samples):
+-            data = self.val_dataset.get(random.randint(0, len(self.val_dataset) - 1))
+-            soup_sequence, face_in_idx, face_out_idx, target = self.sequencer.get_completion_sequence(
++        CHAMFER_DIR.mkdir(parents=True, exist_ok=True)
++
++        # Per-val-sample Chamfer-vs-GT-OBJ records: (shape_id, cd, 3V_gt+F_gt, V_pred)
++        records: list[tuple[str, float, int, int]] = []
++
++        for k in tqdm(range(len(self.val_dataset)), desc="val recon"):
++            data = self.val_dataset.get(k)
++            name = self.val_dataset.names[k]
++            synset, shape_id = synset_and_canonical_shape_id(name)
++
++            # Resolve GT ShapeNet OBJ, normalize to [-0.5, 0.5], apply the (x,y,z) -> (z,x,y) axis
++            # permutation ``sort_vertices_and_faces`` bakes into pred coords, then build (F_gt, 9).
++            gt_obj_path = GT_ROOT / synset / shape_id / "models" / "model_normalized.obj"
++            gt_tri_tensor = None
++            baseline_3VF = 0
++            try:
++                tm_gt = trimesh.load(str(gt_obj_path), force="mesh", skip_materials=True)
++                baseline_3VF = len(tm_gt.vertices) * 3 + len(tm_gt.faces)
++                gt_verts = normalize_vertices(np.asarray(tm_gt.vertices, dtype=np.float32))
++                gt_verts = gt_verts[:, [2, 0, 1]]
++                gt_tris = gt_verts[np.asarray(tm_gt.faces, dtype=np.int64)]  # (F_gt, 3, 3)
++                gt_tri_tensor = torch.from_numpy(gt_tris.reshape(-1, 9)).float().to(self.device)
++            except Exception:
++                pass
++
++            # Autoregressive generation via beam search
++            soup_sequence, face_in_idx, face_out_idx, _target = self.sequencer.get_completion_sequence(
+                 data.x.to(self.device),
+                 data.edge_index.to(self.device),
+                 data.faces.to(self.device),
+                 data.num_vertices,
+-                12
++                12,
+             )
+             y = self.model.generate_with_beamsearch(
+-                soup_sequence, face_in_idx, face_out_idx, self.sequencer, self.config.max_val_tokens, use_kv_cache=True
++                soup_sequence, face_in_idx, face_out_idx, self.sequencer,
++                self.config.max_val_tokens, use_kv_cache=True,
+             )
+             if y is None:
+                 continue
+-            gen_vertices, gen_faces = self.sequencer.decode(y[0], decoder)
+-            plot_vertices_and_faces(gen_vertices, gen_faces, self.output_dir_image / f"{self.global_step:06d}_{k}.jpg")
+ 
++            gen_vertices, gen_faces = self.sequencer.decode(y[0], decoder)
++            plot_vertices_and_faces(gen_vertices, gen_faces, self.output_dir_image / f"{name}.jpg")
++            obj_path = self.output_dir_mesh / f"{name}.obj"
+             try:
+-                trimesh.Trimesh(vertices=gen_vertices, faces=gen_faces, process=False).export(self.output_dir_mesh / f"{self.global_step:06d}_{k}.obj")
+-            except Exception as e:
++                trimesh.Trimesh(vertices=gen_vertices, faces=gen_faces, process=False).export(str(obj_path))
++            except Exception:
+                 pass  # sometimes the mesh is invalid (ngon) and we don't want to crash
+ 
++            # Compute Chamfer: pred tris (F_pred, 9) vs GT tris (F_gt, 9), both normalized, 2048 pts/side
++            if gt_tri_tensor is not None and gen_faces is not None and len(gen_faces) > 0:
++                try:
++                    pred_verts = normalize_vertices(np.asarray(gen_vertices, dtype=np.float32))
++                    pred_tris = pred_verts[np.asarray(gen_faces, dtype=np.int64)]
++                    pred_tri_tensor = torch.from_numpy(pred_tris.reshape(-1, 9)).float().to(self.device)
++                    cd_t = _triangle_tensor_chamfer(pred_tri_tensor, gt_tri_tensor)
++                    if not torch.isnan(cd_t).any():
++                        records.append((shape_id, float(cd_t.item()), baseline_3VF, int(len(gen_vertices))))
++                except Exception:
++                    pass
++
++        # Aggregate ratio: sum(V_pred * embed_dim) / sum(3V_gt + F_gt).
++        # MeshGPT's VQ-VAE stores one ``embed_dim``-wide feature per vertex (residual-VQ tokens
++        # are per-vertex, shared across incident faces), so the non-shared count per mesh is
++        # V * embed_dim - analogous to MeshGPT_us's ``keep_k * latent_dim_per_code``.
++        embed_dim = int(self.vq_cfg.embed_dim)
++        sum_non_shared = sum(r[3] * embed_dim for r in records)
++        sum_baselines = sum(r[2] for r in records if r[2] > 0)
++        ratio = (sum_non_shared / sum_baselines) if sum_baselines > 0 else 0.0
++        lines = [
++            f"Chamfer Distance for {sid} with ratio {ratio:.6f}: {cd:.6f}\n"
++            for (sid, cd, _b, _f) in records
++        ]
++        (CHAMFER_DIR / "distance.txt").write_text("".join(lines))
++
+     def train_dataloader(self):
+         return TriangleNodesWithFacesDataloader(self.train_dataset, batch_size=self.config.batch_size, shuffle=True, drop_last=not self.config.overfit, num_workers=self.config.num_workers, pin_memory=True)
+ 
+@@ -120,6 +193,26 @@ class QuantSoupModelTrainer(pl.LightningModule):
+         return TriangleNodesWithFacesDataloader(self.val_dataset, batch_size=self.config.batch_size, shuffle=True, drop_last=False, num_workers=self.config.num_workers)
+ 
+ 
++def _triangle_tensor_chamfer(pred_coords: torch.Tensor, gt_coords: torch.Tensor, num_samples: int = 2048) -> torch.Tensor:
++    """Chamfer distance between separated-triangle tensors (F, 9). Samples ``num_samples`` points per
++    mesh surface, then bidirectional Chamfer via pytorch3d. Returns NaN scalar on failure."""
++    try:
++        pred_vertices = pred_coords.reshape(-1, 3)
++        gt_vertices = gt_coords.reshape(-1, 3)
++        pred_num_faces = pred_coords.shape[0]
++        gt_num_faces = gt_coords.shape[0]
++        pred_faces = torch.arange(pred_num_faces * 3, dtype=torch.long, device=pred_coords.device).reshape(pred_num_faces, 3)
++        gt_faces = torch.arange(gt_num_faces * 3, dtype=torch.long, device=gt_coords.device).reshape(gt_num_faces, 3)
++        pred_mesh = Meshes(verts=[pred_vertices], faces=[pred_faces])
++        gt_mesh = Meshes(verts=[gt_vertices], faces=[gt_faces])
++        pred_points = sample_points_from_meshes(pred_mesh, num_samples=num_samples)
++        gt_points = sample_points_from_meshes(gt_mesh, num_samples=num_samples)
++        cd, _ = chamfer_distance(pred_points, gt_points)
++        return cd
++    except Exception:
++        return torch.tensor(float('nan'), device=pred_coords.device)
++
++
+ def get_qsoup_model_config(config, vq_embed_levels):
+     cfg = EasyDict({
+         'block_size': config.block_size,
+diff --git a/trainer/train_vocabulary.py b/trainer/train_vocabulary.py
+index 52c0db4..85c9fab 100644
+--- a/trainer/train_vocabulary.py
++++ b/trainer/train_vocabulary.py
+@@ -1,3 +1,11 @@
++import re
++import sys
++from pathlib import Path
++
++_REPO_ROOT = Path(__file__).resolve().parents[1]
++if str(_REPO_ROOT) not in sys.path:
++    sys.path.insert(0, str(_REPO_ROOT))
++
+ import omegaconf
+ import torch_scatter
+ import trimesh
+@@ -5,9 +13,13 @@ from cosine_annealing_warmup import CosineAnnealingWarmupRestarts
+ import pytorch_lightning as pl
+ import hydra
+ from lightning_utilities.core.rank_zero import rank_zero_only
+-from pathlib import Path
+ import torch
++import numpy as np
++from tqdm import tqdm
+ from vector_quantize_pytorch import ResidualVQ
++from pytorch3d.loss import chamfer_distance
++from pytorch3d.structures import Meshes
++from pytorch3d.ops import sample_points_from_meshes
+ 
+ from dataset import quantize_coordinates
+ from dataset.triangles import create_feature_stack_from_triangles, TriangleNodesWithFaces, TriangleNodesWithFacesDataloader
+@@ -16,6 +28,18 @@ from model.decoder import resnet34_decoder
+ from model.softargmax import softargmax
+ from trainer import create_trainer, step, create_conv_batch
+ from util.visualization import plot_vertices_and_faces, triangle_sequence_to_mesh
++from util.misc import normalize_vertices
++
++MODELS_TEST_HOME = Path(__file__).resolve().parents[3]
++GT_ROOT = MODELS_TEST_HOME / "data" / "shapenet"
++CHAMFER_DIR = MODELS_TEST_HOME / "distances" / "MeshGPT_orig"
++
++
++def synset_and_canonical_shape_id(dataset_name: str) -> tuple[str, str]:
++    """ShapeNet ``<synset>_<hash>[_augsuffix]`` -> (synset, canonical shape id)."""
++    synset, rest = dataset_name.split("_", 1)
++    shape_id = re.sub(r"_((ang|dec)\d+)$", "", rest, flags=re.IGNORECASE)
++    return synset, shape_id
+ 
+ 
+ class TriangleTokenizationGraphConv(pl.LightningModule):
+@@ -146,7 +170,7 @@ class TriangleTokenizationGraphConv(pl.LightningModule):
+             optimizer.zero_grad(set_to_none=True)  # type: ignore
+         self.log("lr", optimizer.param_groups[0]['lr'], on_step=True, on_epoch=False, prog_bar=False, logger=True, sync_dist=True)  # type: ignore
+ 
+-    def validation_step(self, data, batch_idx, dataloader_idx):
++    def validation_step(self, data, batch_idx, dataloader_idx=0):
+         encoded_x = self.encoder(data.x, data.edge_index, data.batch)
+         encoded_x = encoded_x.reshape(encoded_x.shape[0] * 3, 192)
+         encoded_x = self.distribute_features_fn(encoded_x, data.faces, data.num_vertices.sum(), self.device)
+@@ -183,12 +207,14 @@ class TriangleTokenizationGraphConv(pl.LightningModule):
+ 
+     @rank_zero_only
+     def on_validation_epoch_end(self):
+-        category_names = [""] + [x[0].strip("_") for x in self.interesting_categories]
+-        for didx, dataset in enumerate([self.train_dataset] + self.val_datasets):
+-            output_dir_image = self.output_dir_image_train if didx == 0 else self.output_dir_image_val
+-            output_dir_mesh = self.output_dir_mesh_train if didx == 0 else self.output_dir_mesh_val
+-            for k in range(self.config.num_val_samples):
+-                data = dataset.get(k * (len(dataset) // self.config.num_val_samples) % len(dataset))
++        val_chamfer_records: list[tuple[str, float, int, int]] = []
++        category_names = [x[0].strip("_") for x in self.interesting_categories]
++
++        for didx, dataset in enumerate(self.val_datasets):
++            output_dir_image = self.output_dir_image_val
++            output_dir_mesh = self.output_dir_mesh_val
++            for k in tqdm(range(len(dataset)), desc=f"val[{didx}] recon"):
++                data = dataset.get(k)
+                 encoded_x = self.encoder(data.x.to(self.device), data.edge_index.to(self.device), torch.zeros([data.x.shape[0]], device=self.device).long())
+                 encoded_x = encoded_x.reshape(encoded_x.shape[0] * 3, 192)
+                 encoded_x = self.distribute_features_fn(encoded_x, data.faces.to(self.device), data.num_vertices, self.device)
+@@ -201,23 +227,60 @@ class TriangleTokenizationGraphConv(pl.LightningModule):
+                 decoded_x_conv = self.decoder(encoded_x_conv)
+                 if self.config.ce_output:
+                     decoded_x = decoded_x_conv.reshape(-1, decoded_x_conv.shape[-2], decoded_x_conv.shape[-1])[conv_mask, :, :]
++                    decoded_c = softargmax(decoded_x) / (self.config.num_tokens - 3) - 0.5
+                     coords = decoded_x.argmax(-1).detach().cpu().numpy() / (self.config.num_tokens - 3) - 0.5
+                 else:
+                     decoded_x = decoded_x_conv.reshape(-1, decoded_x_conv.shape[-1])[conv_mask, :]
++                    decoded_c = decoded_x
+                     coords = decoded_x.detach().cpu().numpy()
++
++                # Resolve GT ShapeNet mesh, normalize and match axis convention of training pipeline.
++                _synset, shape_id = synset_and_canonical_shape_id(dataset.names[k])
++                gt_obj_path = GT_ROOT / _synset / shape_id / "models" / "model_normalized.obj"
++                gt_tri_tensor = None
++                baseline_3VF = 0
++                try:
++                    _tm_gt = trimesh.load(str(gt_obj_path), force="mesh", skip_materials=True)
++                    baseline_3VF = len(_tm_gt.vertices) * 3 + len(_tm_gt.faces)
++                    _gt_verts = normalize_vertices(np.asarray(_tm_gt.vertices, dtype=np.float32))
++                    _gt_verts = _gt_verts[:, [2, 0, 1]]
++                    _gt_tris = _gt_verts[np.asarray(_tm_gt.faces, dtype=np.int64)]
++                    gt_tri_tensor = torch.from_numpy(_gt_tris.reshape(-1, 9)).float().to(self.device)
++                except Exception:
++                    pass
++
+                 gen_vertices, gen_faces = triangle_sequence_to_mesh(coords)
+-                plot_vertices_and_faces(gen_vertices, gen_faces, output_dir_image / f"{self.global_step:06d}_{category_names[didx]}_{k}.jpg")
++                plot_vertices_and_faces(gen_vertices, gen_faces, output_dir_image / f"{self.current_epoch:06d}_{category_names[didx]}_{k}.jpg")
++                obj_path = output_dir_mesh / f"{dataset.names[k]}.obj"
+                 try:
+-                    trimesh.Trimesh(vertices=gen_vertices, faces=gen_faces, process=False).export(output_dir_mesh / f"{self.global_step:06d}_{category_names[didx]}_{k}.obj")
+-                except Exception as e:
++                    trimesh.Trimesh(vertices=gen_vertices, faces=gen_faces, process=False).export(str(obj_path))
++                except Exception:
+                     pass  # sometimes the mesh is invalid (ngon) and we don't want to crash
+ 
++                if gt_tri_tensor is not None:
++                    cd_t = self.compute_chamfer_distance(decoded_c, gt_tri_tensor)
++                    if not torch.isnan(cd_t).any():
++                        val_chamfer_records.append((shape_id, float(cd_t.item()), baseline_3VF, int(data.num_vertices)))
++
++        CHAMFER_DIR.mkdir(parents=True, exist_ok=True)
++        embed_dim = int(self.config.embed_dim)
++        sum_non_shared = sum(r[3] * embed_dim for r in val_chamfer_records)
++        sum_baselines = sum(r[2] for r in val_chamfer_records if r[2] > 0)
++        ratio = (sum_non_shared / sum_baselines) if sum_baselines > 0 else 0.0
++        lines = [f"Chamfer Distance for {sid} with ratio {ratio:.6f}: {cd:.6f}\n" for (sid, cd, _, _) in val_chamfer_records]
++        (CHAMFER_DIR / "distance.txt").write_text("".join(lines))
++
+     def visualize_groundtruth(self):
+         category_names = [""] + [x[0].strip("_") for x in self.interesting_categories]
+         for didx, dataset in enumerate([self.train_dataset] + self.val_datasets):
+             output_dir_image = self.output_dir_image_train if didx == 0 else self.output_dir_image_val
+-            for k in range(self.config.num_val_samples):
+-                data = dataset.get(k * (len(dataset) // self.config.num_val_samples) % len(dataset))
++            # Skip empty splits (e.g. when the pickle only contains a subset of
++            # interesting_categories, other category-filtered val datasets are empty).
++            if len(dataset) == 0:
++                continue
++            num_samples = min(self.config.num_val_samples, len(dataset))
++            for k in range(num_samples):
++                data = dataset.get(k * (len(dataset) // num_samples) % len(dataset))
+                 if self.config.ce_output:
+                     coords = data.y / (self.config.num_tokens - 3) - 0.5
+                 else:
+@@ -226,12 +289,12 @@ class TriangleTokenizationGraphConv(pl.LightningModule):
+                 plot_vertices_and_faces(gen_vertices, gen_faces, output_dir_image / f"GT_{category_names[didx]}_{k}.jpg")
+ 
+     def train_dataloader(self):
+-        return TriangleNodesWithFacesDataloader(self.train_dataset, batch_size=self.config.batch_size, shuffle=True, drop_last=not self.config.overfit, num_workers=self.config.num_workers, pin_memory=True)
++        return TriangleNodesWithFacesDataloader(self.train_dataset, batch_size=self.config.batch_size, shuffle=False, drop_last=not self.config.overfit, num_workers=self.config.num_workers, pin_memory=True)
+ 
+     def val_dataloader(self):
+         dataloaders = []
+         for val_dataset in self.val_datasets:
+-            dataloaders.append(TriangleNodesWithFacesDataloader(val_dataset, batch_size=self.config.batch_size, shuffle=True, drop_last=True, num_workers=self.config.num_workers))
++            dataloaders.append(TriangleNodesWithFacesDataloader(val_dataset, batch_size=self.config.batch_size, shuffle=False, drop_last=True, num_workers=self.config.num_workers))
+         return dataloaders
+ 
+     def get_accuracy(self, x, y):
+@@ -244,6 +307,24 @@ class TriangleTokenizationGraphConv(pl.LightningModule):
+             return torch.all(x.argmax(-1).reshape(-1, 9) == y.reshape(-1, 9), dim=-1).sum() / x.shape[0]
+         return torch.all((quantize_coordinates(x, self.config.num_tokens - 2).reshape(-1, 9) == quantize_coordinates(y, self.config.num_tokens - 2).reshape(-1, 9)), dim=-1).sum() / (x.shape[0])
+ 
++    def compute_chamfer_distance(self, pred_coords, gt_coords, num_samples=2048):
++        """Chamfer Distance between predicted and GT meshes via surface point sampling."""
++        try:
++            pred_vertices = pred_coords.reshape(-1, 3)
++            gt_vertices = gt_coords.reshape(-1, 3)
++            pred_num_faces = pred_coords.shape[0]
++            gt_num_faces = gt_coords.shape[0]
++            pred_faces = torch.arange(pred_num_faces * 3, dtype=torch.long, device=pred_coords.device).reshape(pred_num_faces, 3)
++            gt_faces = torch.arange(gt_num_faces * 3, dtype=torch.long, device=gt_coords.device).reshape(gt_num_faces, 3)
++            pred_mesh = Meshes(verts=[pred_vertices], faces=[pred_faces])
++            gt_mesh = Meshes(verts=[gt_vertices], faces=[gt_faces])
++            pred_points = sample_points_from_meshes(pred_mesh, num_samples=num_samples)
++            gt_points = sample_points_from_meshes(gt_mesh, num_samples=num_samples)
++            chamfer_dist, _ = chamfer_distance(pred_points, gt_points)
++            return chamfer_dist
++        except Exception:
++            return torch.tensor(float('nan'), device=pred_coords.device)
++
+ 
+ def distribute_features(features, face_indices, num_vertices, device):
+     # N = num triangles
+@@ -264,7 +345,10 @@ def dummy_distribute(features, _face_indices, _n, _device):
+ def main(config):
+     trainer = create_trainer("TriangleTokens", config)
+     model = TriangleTokenizationGraphConv(config)
+-    trainer.fit(model, ckpt_path=config.resume)
++    if getattr(config, 'eval_only', True):
++        trainer.validate(model, ckpt_path=config.resume)
++    else:
++        trainer.fit(model, ckpt_path=config.resume)
+ 
+ 
+ if __name__ == '__main__':
