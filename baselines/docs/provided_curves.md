@@ -42,4 +42,4 @@ The code behind these curves is in this repository:
 - VecSet-HAE: [`../../SDF/`](../../SDF/), built on [VecSetX](https://github.com/1zb/VecSetX); the
   base is the released `learnable_vec1024x32_dim1024_depth24_nb` model.
 - MeshGPT (ours): [`../../meshgpt/`](../../meshgpt/), built on
-  [audi/MeshGPT](https://github.com/audi/MeshGPT). See the top-level README for training.
+  [audi/MeshGPT](https://github.com/audi/MeshGPT). See [`../../meshgpt/README.md`](../../meshgpt/README.md) for training.
