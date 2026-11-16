@@ -47,5 +47,3 @@ purposes.
   [shapenet.org](https://shapenet.org) under its terms of use.
 - **Occupancy Networks preprocessed data** (used by CONs) is downloaded by the patched
   `scripts/download_data.sh` from the Occupancy Networks authors.
-- **VecSet and MeshGPT (ours) distance files** in `distances/` were produced by the code in
-  `../SDF/` and `../meshgpt/`; see [`docs/provided_curves.md`](docs/provided_curves.md).

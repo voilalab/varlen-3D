@@ -65,8 +65,7 @@ python metrics/fix_all_distance_ratios.py
 python metrics/fix_all_distance_ratios.py --charge-connectivity   # reference variant, not plotted
 ```
 
-Provided curves (VecSet, MeshGPT ours) are never rewritten; see
-[provided_curves.md](provided_curves.md).
+Our method's curves (VecSet, MeshGPT ours) are never rewritten.
 
 ## Distance file format
 
@@ -75,11 +74,6 @@ distances/<method>/<setting>_distance.txt
 Chamfer Distance for <mesh_hash> with ratio <ratio>: <chamfer>
 [FAIL] Could not compute Chamfer Distance for <mesh_hash>
 ```
-
-The committed `ngp/` and `CONs/` files were written by an earlier script and carry the
-reconstruction's file extension in the id (`<hash>.obj`, `<hash>.off`). Every parser here
-(`graphs/*.py`, `fix_all_distance_ratios.py`) strips a trailing extension, so this has no effect;
-re-running `metrics/distance.py` writes bare hashes.
 
 | Directory | Files | Setting |
 |---|---|---|

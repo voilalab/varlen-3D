@@ -11,7 +11,6 @@ the page for the method you are running.
 | [cons.md](cons.md) | Convolutional Occupancy Networks: one model per `c_dim`, trained on 1000 chairs |
 | [meshgpt_original.md](meshgpt_original.md) | MeshGPT (original): released vocabulary model, evaluated on our val split |
 | [metrics.md](metrics.md) | Chamfer distance, compression ratio, distance-file format, figures |
-| [provided_curves.md](provided_curves.md) | VecSet / VecSet-HAE and MeshGPT (ours): supplied as finished distance files |
 
 ## The pipeline
 
@@ -61,9 +60,7 @@ splitting `val.lst`.
 
 ## What "reproduce" means here
 
-- **Figures** redraw exactly from the committed `distances/` (section 0 of the top-level README).
 - **Compression ratios** are deterministic: they depend only on the payload definitions and the
   GT meshes, and recompute exactly.
 - **Chamfer distances** are re-measured from reconstructions. Training is stochastic (random
-  initialisation, sampling), so retrained models give close but not bit-identical numbers. Each
-  method page has the committed per-setting numbers to compare against.
+  initialisation, sampling), so retrained models give close but not bit-identical numbers.

@@ -77,27 +77,8 @@ python metrics/distance.py --project ngf      # -> distances/ngf/lod_<N>_distanc
 `MLP` class; `metrics/bit_accounting.py` substitutes a plain `nn.Module` for it while loading, so
 NGF's own source and its dependencies (`ngfutil`, `meshio`, ...) are not needed in the `distance` env.
 
-## Expected results (committed `distances/ngf/`)
-
-| lod | ratio | meshes scored | median CD | mean CD |
-|---|---|---|---|---|
-| 4 | 0.3030 | 96 | 2.277e-01 | 2.422e-01 |
-| 8 | 0.3116 | 99 | 2.514e-01 | 2.573e-01 |
-| 16 | 0.3191 | 100 | 2.622e-01 | 2.946e-01 |
-| 32 | 0.3211 | 98 | 2.311e-01 | 2.652e-01 |
-| 64 | 0.3201 | 92 | 2.164e-01 | 2.419e-01 |
-| 125 | 0.3503 | 92 | 1.862e-01 | 1.897e-01 |
-| 250 | 0.3692 | 82 | 8.115e-02 | 1.229e-01 |
-| 500 | 0.4558 | 81 | 5.014e-02 | 1.240e-01 |
-| 1000 | 0.6186 | 81 | 4.097e-02 | 1.281e-01 |
-| 2000 | 0.8858 | 83 | 5.263e-02 | 1.406e-01 |
-| 4000 | 1.2690 | 79 | 1.566e-01 | 1.733e-01 |
-| 5000 | 1.3741 | 77 | 1.518e-01 | 1.720e-01 |
-
 ## Known behaviour
 
 - **Quadrangulation times out on a different subset of meshes at each LOD** (more often at high LOD),
   so 77–100 meshes are scored per setting. Raising `--quad-timeout` recovers some of them.
 - At low LOD the ratio barely changes, because the MLP weights dominate the payload.
-- The committed Chamfer values come from an earlier version of `metrics/distance.py` that sampled
-  points without a seed; re-scoring gives values within sampling noise.

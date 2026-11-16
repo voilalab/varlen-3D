@@ -85,24 +85,6 @@ cd ../.. && conda activate distance
 python metrics/distance.py --project ngp      # -> distances/ngp/log2_<T>_distance.txt
 ```
 
-## Expected results (committed `distances/ngp/`)
-
-| T | ratio | meshes scored | median CD | mean CD |
-|---|---|---|---|---|
-| 2 | 0.0597 | 11 | 1.813e-01 | 1.814e-01 |
-| 3 | 0.0738 | 12 | 1.157e-01 | 1.610e-01 |
-| 5 | 0.0562 | 16 | 7.678e-02 | 2.024e-01 |
-| 7 | 0.1040 | 72 | 9.017e-02 | 1.248e-01 |
-| 8 | 0.1607 | 90 | 6.633e-02 | 1.036e-01 |
-| 10 | 0.4128 | 93 | 2.172e-03 | 2.496e-02 |
-| 12 | 1.4289 | 93 | 4.780e-04 | 8.483e-04 |
-| 14 | 5.1522 | 93 | 4.960e-04 | 1.032e-03 |
-| 17 | 35.1855 | 93 | 5.340e-04 | 1.195e-03 |
-| 19 | 126.1394 | 93 | 5.250e-04 | 1.209e-03 |
-
-The ratio is aggregated over the meshes scored at that setting, which is why it is not monotone in
-T at the low end.
-
 ## Known behaviour
 
 - **7 of 100 meshes fail at every T** (SDF training diverges on degenerate geometry):
@@ -111,6 +93,3 @@ T at the low end.
   `e9f36f74e22ca0897298e452825d1f0c`.
 - **At T ≤ 7 most meshes have no usable reconstruction**, so those settings are averaged over
   11–72 meshes instead of 93.
-- The committed Chamfer values were computed with an earlier version of `metrics/distance.py` that
-  sampled points without a seed. Re-scoring the same reconstructions gives values within about 3%
-  (median per mesh).

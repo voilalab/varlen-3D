@@ -102,20 +102,3 @@ python time_inference.py      # -> parameter_sweep_results/inference_times.csv
 cd ../.. && conda activate distance
 python metrics/distance.py --project cons     # -> distances/CONs/cdim_<c>_distance.txt
 ```
-
-## Expected results (committed `distances/CONs/`)
-
-| c_dim | ratio | meshes scored | median CD | mean CD |
-|---|---|---|---|---|
-| 4 | 2.8418 | 100 | 6.237e-02 | 8.237e-02 |
-| 8 | 5.6835 | 100 | 6.325e-02 | 8.248e-02 |
-| 12 | 8.5253 | 100 | 6.248e-02 | 8.084e-02 |
-| 16 | 11.3671 | 100 | 6.310e-02 | 8.221e-02 |
-| 20 | 14.2088 | 100 | 6.269e-02 | 8.103e-02 |
-| 24 | 17.0506 | 100 | 6.366e-02 | 8.314e-02 |
-| 28 | 19.8924 | 100 | 6.255e-02 | 8.091e-02 |
-| 32 | 22.7341 | 100 | 6.286e-02 | 8.018e-02 |
-
-All 100 val meshes are generated for every `c_dim`. The committed Chamfer values come from an
-earlier version of `metrics/distance.py` that sampled points without a seed; re-scoring gives values
-within sampling noise.

@@ -112,15 +112,6 @@ conda activate meshgpt
 python metrics/meshgpt_decimated_counts.py
 ```
 
-## Expected results (committed `distances/MeshGPT_orig1/`)
-
-| ratio | meshes scored | median CD | mean CD |
-|---|---|---|---|
-| 0.0376 | 99 | 6.562e-04 | 2.074e-03 |
-
-Re-scoring our reconstructions with `metrics/distance.py` reproduces these values: medians identical,
-most per-mesh values to the last digit.
-
 ## Known behaviour
 
 - **1 of 100 val meshes is missing** (`8ec247d0e133ad3ce922ceea1248b9b0`): it cannot be decimated

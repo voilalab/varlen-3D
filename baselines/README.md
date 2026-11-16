@@ -6,12 +6,10 @@ Rate-distortion benchmark of neural 3D shape representations on ShapeNet chairs 
 This folder trains and scores the **baselines** (NGP, NGF, BACON, CONs, MeshGPT original). The
 curves for our method (**VecSet-HAE** and **MeshGPT (ours)**) and for the original **VecSet** base
 model come from the code at the top level of this repository ([`../SDF/`](../SDF/) and
-[`../meshgpt/`](../meshgpt/)). Their distance files are included here as-is and used directly by
-the figures.
+[`../meshgpt/`](../meshgpt/)).
 
 The pipeline is: **train each baseline → reconstruct the 100 val meshes → score them with
-`metrics/distance.py` → plot with `graphs/`**. All measured numbers are committed in `distances/`, so
-the figures can be redrawn without running any training.
+`metrics/distance.py` → plot with `graphs/`**.
 
 ```
 setup_methods.sh   clone each baseline's public upstream at a pinned commit, apply patches/, add overlays/
@@ -21,26 +19,14 @@ envs/*.yml         conda environments (one per method + `distance` for scoring)
 data/shapenet/     val.lst / train.lst; put ShapeNet chairs here (see step 1)
 preprocessing/     OBJ -> .xyz point cloud with normals (BACON input)
 metrics/           Chamfer distance + compression ratio -> distances/
-distances/         the measurements: one dir per method, one .txt per setting
+distances/         written by metrics/: one dir per method, one .txt per setting
 graphs/            figures from distances/ -> figures/
-figures/           generated figures
+figures/           written by graphs/
 third_party_licenses/  copies of the upstream licenses (see THIRD_PARTY_NOTICES.md)
 ```
 
-**Detailed per-method guides** (how each method works, what we changed, checkpoints and downloads,
-expected numbers) are in [`docs/`](docs/README.md).
-
-## 0. Just redraw the figures
-
-```bash
-conda env create -f envs/distance.yml && conda activate distance
-python graphs/graph_paper_figures.py      # figures/paper_figures/fig_rd_{implicit,mesh}.{png,pdf}
-python graphs/graph_median.py             # figures/graph_median_cd.png
-python graphs/graph_mean.py               # figures/graph_mean_cd.png
-```
-
-`--time-markers` on `graph_paper_figures.py` scales markers by decode time. It reads the
-`inference_times.csv` files written in step 3; the provided curves ship theirs in `distances/`.
+**Detailed per-method guides** (how each method works, what we changed, checkpoints and downloads)
+are in [`docs/`](docs/README.md).
 
 ## Our method's curves (produced by `../SDF/` and `../meshgpt/`, not by this folder)
 
@@ -159,6 +145,7 @@ Each writes `distances/<method>/<setting>_distance.txt`, one line per val mesh:
 cloud is normalized to the unit cube, the reconstruction is ICP-aligned to the GT, and then
 symmetric mean squared nearest-neighbour distance is computed with pytorch3d. GT samples are seeded
 by the GT file's absolute path, so numbers move slightly (sampling noise) if `data/` lives elsewhere.
+`--no-icp` turns off the ICP alignment step.
 
 **Ratio:** Σ per-mesh payload bits / Σ uncompressed GT mesh bits over the scored meshes. Shared
 weights are free; per-mesh latents and weights are charged. Definitions are in
@@ -173,7 +160,17 @@ conda activate distance
 python metrics/fix_all_distance_ratios.py     # --dry-run to preview; provided curves are skipped
 ```
 
-Then redraw the figures (step 0).
+Then draw the figures:
+
+```bash
+conda activate distance
+python graphs/graph_paper_figures.py      # figures/paper_figures/fig_rd_{implicit,mesh}.{png,pdf}
+python graphs/graph_median.py             # figures/graph_median_cd.png
+python graphs/graph_mean.py               # figures/graph_mean_cd.png
+```
+
+`--time-markers` on `graph_paper_figures.py` scales markers by decode time. It reads the
+`inference_times.csv` files written in step 3.
 
 ### Using an existing workspace
 
@@ -183,15 +180,6 @@ repo. To score reconstructions that live elsewhere:
 ```bash
 BENCH_WORKSPACE=/path/to/workspace python metrics/distance.py --project ngp
 ```
-
-## Notes on the committed numbers
-
-| Files | How they were produced | Reproduced by step 4 |
-|---|---|---|
-| `MeshGPT_orig1` | seeded sampling + ICP (this script) | yes: medians identical, most values to the last digit |
-| `ngp`, `CONs`, `ngf`, `bacon` | earlier version of the script: same pipeline but unseeded sampling | up to sampling noise (NGP: ~3% median per mesh) |
-
-`--no-icp` turns off the ICP alignment step.
 
 ## License
 

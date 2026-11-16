@@ -93,14 +93,3 @@ python metrics/distance.py --project bacon-flat     # -> distances/bacon/level_<
 
 BACON is scored against the GT mesh (`model_normalized.obj`), like every other method, not against
 its input point cloud.
-
-## Expected results (committed `distances/bacon/`)
-
-| Level | ratio | meshes scored | median CD | mean CD |
-|---|---|---|---|---|
-| 1 | 2.8806 | 100 | 1.861e-03 | 3.788e-03 |
-| 2 | 5.7557 | 100 | 1.770e-03 | 3.834e-03 |
-| 3 | 8.6308 | 100 | 1.855e-03 | 3.854e-03 |
-| 4 | 11.5058 | 100 | 1.984e-03 | 4.033e-03 |
-
-All 100 meshes succeed at every level.

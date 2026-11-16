@@ -6,7 +6,7 @@ Code for the paper. Each folder has its own README with setup and commands.
 |---|---|
 | [`meshgpt/`](meshgpt/README.md) | Our method on meshes: the hyper-autoencoder trained on a frozen, pretrained MeshGPT. |
 | [`SDF/`](SDF/README.md) | Our method on signed distance fields: the hyper-autoencoder trained on a frozen, pretrained VecSet autoencoder. |
-| [`baselines/`](baselines/README.md) | The baselines (Instant-NGP, NGF, BACON, Convolutional Occupancy Networks, original MeshGPT), the shared Chamfer distance and compression-ratio code, the measured distances, and the rate-distortion figure scripts. |
+| [`baselines/`](baselines/README.md) | The baselines (Instant-NGP, NGF, BACON, Convolutional Occupancy Networks, original MeshGPT), the shared Chamfer distance and compression-ratio code, and the rate-distortion figure scripts. |
 
 ## License
 
