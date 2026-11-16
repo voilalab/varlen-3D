@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/academicons@1.9.4/css/academicons.min.css">
   <link rel="stylesheet" href="./static/css/index.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js"></script>
 </head>
 <body>
 
@@ -66,10 +67,11 @@
           <p>
             Compressing 3D shapes is important for the efficiency of many applications, yet existing methods
             either cannot leverage dataset-level statistics or use a fixed compression ratio for all shapes.
-            We propose a learned variable-length compression method that exploits structure across a training
-            dataset while adapting compressed representation size to individual shape complexity using only
-            fast feed-forward inference. Our method operates on general latent representations and improves
-            rate&ndash;distortion for both meshes and signed distance fields.
+            We propose a <strong>learned variable-length compression</strong> method that exploits structure
+            across a training dataset while adapting compressed representation size to individual shape
+            complexity using only fast feed-forward inference. Our method operates on general latent
+            representations and improves rate&ndash;distortion for both <strong>meshes</strong> and
+            <strong>signed distance fields</strong>.
           </p>
         </div>
       </div>
@@ -79,7 +81,7 @@
 
 <section class="section">
   <div class="container is-max-desktop">
-    <h2 class="title is-3 has-text-centered">Method</h2>
+    <h2 class="title is-3 has-text-centered">Overview</h2>
     <figure class="figure">
       <img src="./static/images/fig1_overview.png"
            alt="Diagram of the variable-length hyper-autoencoder between a frozen signal encoder and decoder.">
@@ -88,27 +90,132 @@
         autoencoder compresses them into an ordered sequence of tokens (green), where any prefix of
         <i>k</i> tokens suffices to reconstruct the latents, which are decoded back to the signal space.
         Dashed arrows show the two supervision paths: the latent loss and the downstream reconstruction
-        losses. Since the underlying autoencoder is frozen, our method can be combined with any existing
-        shape autoencoder without retraining it.
+        losses.
       </figcaption>
     </figure>
+    <div class="content has-text-justified mt-5">
+      <p>
+        Learned compressors hold the promise of improving with more data and compute, but their
+        compression ratio is usually <strong>fixed as a hyperparameter</strong> before training. Every
+        shape is therefore compressed at the same ratio, regardless of its complexity.
+      </p>
+      <p>
+        We propose a learning-based variable-length compressor that <strong>retrofits any pretrained shape
+        autoencoder</strong>. We use a <strong>frozen encoder</strong> to map a shape to a latent vector, and
+        train a small <strong>hyper-autoencoder</strong> that maps this latent vector into an
+        <strong>ordered sequence of tokens</strong>. A regression decoder then maps <em>any prefix</em> of
+        this token sequence to approximate the full latent vector, and then the full shape, with quality
+        improving as more tokens are kept. At inference time, users can <strong>choose how many tokens to
+        keep per shape</strong>, so more bits can be allocated to more complex shapes. Since the underlying
+        autoencoder is frozen, our method can be combined with any existing shape autoencoder without
+        retraining it.
+      </p>
+      <p>Our contributions are:</p>
+      <ul>
+        <li>A novel 3D compression framework that <strong>reuses pretrained shape autoencoders</strong> and
+          allows the compression ratio to be <strong>chosen per shape at inference time</strong> without
+          retraining, and</li>
+        <li><strong>State-of-the-art rate&ndash;distortion on meshes and SDFs</strong>, compared to both
+          per-shape and dataset-level unquantized compression baselines.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <h2 class="title is-3 has-text-centered">Method</h2>
+    <div class="content has-text-justified">
+      <p>
+        Our method assumes access to a pretrained signal encoder \(\mathcal{E}\) that encodes a signal
+        \(s\) (e.g., a mesh, an SDF, or an image) into a latent token set \(z = \{z_1, \ldots, z_Z\}\), and
+        its corresponding decoder \(\mathcal{D}\). Our goal is to convert \(z\) to an
+        <strong>ordered set of tokens</strong> \(\{t_1, \ldots, t_K\}\), so that <em>any prefix</em>
+        \(\{t_1, \ldots, t_k\}\) can be decoded into an approximation of \(z\), with fidelity increasing
+        with \(k\).
+      </p>
+
+      <h3 class="title is-4">Hyper-encoder</h3>
+      <p>
+        We apply <strong>Perceiver-style cross-attention</strong>, where the keys and values are derived
+        from \(z\) and the queries come from a learned vector set. The outputs, which we call
+        <strong>hyper-tokens</strong>, form a sequence \(\{t_1, \ldots, t_K\}\) of the same length as the
+        learned query set. These hyper-tokens then undergo a sequence of <strong>causal self-attention</strong>
+        layers. The ordering of the hyper-tokens results from both the inherent ordering in the learned
+        queries and the causal nature of the self-attention, which encourages earlier tokens to capture as
+        much structure as possible.
+      </p>
+
+      <h3 class="title is-4">Hyper-decoder</h3>
+      <p>
+        Our hyper-decoder reconstructs an approximation of the full original latent set <em>even from a
+        truncated prefix</em> \(\{t_1, \ldots, t_k\}\). It uses Perceiver-style cross-attention with the
+        hyper-tokens as keys and values and a separate set of \(Z\) learned decoder tokens as queries, so the
+        reconstruction \(\tilde{z}^{(k)} = \mathrm{HAE}_k(z)\) always has the same length \(Z\), irrespective
+        of the number of suffix hyper-tokens that are dropped.
+      </p>
+
+      <h3 class="title is-4">Two-stage training</h3>
+      <p>
+        We train the hyper-autoencoder in two self-supervised stages. In the first stage, we minimize a
+        <strong>latent-space loss</strong>:
+      </p>
+      \[
+        \mathcal{L}_{\text{latent}} = \mathbb{E}_{s \sim \mathcal{S}}\, \mathbb{E}_{k \le K}
+        \left[ \left\| \mathcal{E}(s) - \mathrm{HAE}_k(\mathcal{E}(s)) \right\|_2^2 \right].
+      \]
+      <p>
+        In the second stage, we finetune with <strong>signal-space losses</strong> to retain the
+        performance of the pretrained signal autoencoder:
+      </p>
+      \[
+        \mathcal{L}_{\text{signal}} = \mathbb{E}_{s \sim \mathcal{S}}\, \mathbb{E}_{k \le K}
+        \left[ \mathrm{SignalLoss}\big(s, \mathcal{D}(\mathrm{HAE}_k(\mathcal{E}(s)))\big) \right],
+      \]
+      <p>
+        where SignalLoss could be any loss function that is specific to autoencoder training for the given
+        modality. The latent-space stage is <strong>faster</strong>, as it avoids the expensive gradient flow
+        through the signal decoder, and <strong>more stable</strong> early in training.
+      </p>
+      <p>
+        Because the hyper-decoder must approximate the full latent and signal from an arbitrarily sized
+        prefix, the hyper-encoder naturally learns to encode <strong>coarse structure in earlier
+        hyper-tokens</strong>, while reserving the higher-index hyper-tokens for
+        <strong>fine-grained details</strong>.
+      </p>
+    </div>
   </div>
 </section>
 
 <section class="section">
   <div class="container is-max-desktop">
     <h2 class="title is-3 has-text-centered">Results</h2>
+    <div class="content has-text-justified">
+      <p>
+        We tokenize the pretrained latent spaces of <strong>MeshGPT</strong> (meshes) and
+        <strong>3DShape2VecSet</strong> (SDFs), evaluate on ShapeNet, and compare rate&ndash;distortion,
+        measured as Chamfer distance versus compression ratio, against per-shape and dataset-level
+        compression baselines.
+      </p>
+    </div>
     <figure class="figure">
       <img src="./static/images/fig2_results.png"
            alt="SDF and mesh reconstructions decoded from k tokens, with rate-distortion and Chamfer distance versus k plots.">
       <figcaption class="figure-caption content has-text-justified">
         Variable-length compression of SDF and MeshGPT latents. Top: sample SDF and mesh reconstructions,
-        each decoded from the first <i>k</i> tokens. As <i>k</i> increases, so does the fidelity compared to
-        the ground truth. Bottom: baseline comparison of rate&ndash;distortion and Chamfer distance vs.
-        <i>k</i>, for SDF and mesh compression. We show compression ratios for both quantized and
-        unquantized versions of MeshGPT; our method is unquantized.
+        each decoded from the first <i>k</i> tokens. Bottom: baseline comparison of rate&ndash;distortion and
+        Chamfer distance vs. <i>k</i>, for SDF and mesh compression. We show compression ratios for both
+        quantized and unquantized versions of MeshGPT; our method is unquantized.
       </figcaption>
     </figure>
+    <div class="content has-text-justified mt-5">
+      <p>
+        As <i>k</i> increases, so does the amount of information preserved compared to the ground truth.
+        For both modalities, our method <strong>lies on the Pareto frontier</strong> in fidelity vs.
+        compression ratio, and the original signal autoencoder does not exceed our method's performance,
+        showing that our hyper-autoencoder <strong>does not induce performance degradation</strong>.
+      </p>
+    </div>
 
     <figure class="figure mt-6">
       <img src="./static/images/fig3_complexity.png"
@@ -118,25 +225,48 @@
         &ldquo;geometric complexity&rdquo; of shapes.
       </figcaption>
     </figure>
+    <div class="content has-text-justified mt-5">
+      <p>
+        Shapes that require more tokens (larger <i>k</i>) are visually more complex, indicating that our
+        hyper-autoencoder learns to <strong>compress simpler shapes using fewer tokens</strong>, achieving
+        variable-length compression.
+      </p>
+    </div>
   </div>
 </section>
 
 <section class="section">
   <div class="container is-max-desktop">
     <h2 class="title is-3 has-text-centered">Ablations</h2>
+    <div class="content has-text-justified">
+      <p>
+        Compared to <strong>FlexTok</strong>, another variable-length tokenizer, we use a
+        <strong>regression hyper-decoder</strong> whereas FlexTok uses a <strong>flow-based generative
+        decoder</strong>. Our method can train on downstream signal-space losses through its regression
+        decoder, but not through a flow decoder, as we cannot backpropagate through ODE sampling. We compare
+        three decoders: (1) our regression decoder trained with the downstream reconstruction losses,
+        (2) the same regression decoder trained with the latent loss only, and (3) a FlexTok-style flow
+        decoder.
+      </p>
+    </div>
     <div class="columns is-centered">
       <div class="column is-three-quarters">
         <figure class="figure">
           <img src="./static/images/fig4_ablation.png"
                alt="Chamfer distance versus tokens kept for three decoders.">
           <figcaption class="figure-caption content has-text-justified">
-            Decoder ablation. Chamfer distance vs. <i>k</i> on meshes for our regression decoder, the same
-            regression decoder trained with the latent loss only, and a FlexTok-style flow decoder. At low
-            <i>k</i> the flow decoder returns a sharper but wrong signal; at high <i>k</i> the regression
-            decoders are more faithful.
+            Decoder ablation. Chamfer distance vs. <i>k</i> on meshes. At low <i>k</i> the flow decoder
+            returns a sharper but wrong signal; at high <i>k</i> the regression decoders are more faithful.
           </figcaption>
         </figure>
       </div>
+    </div>
+    <div class="content has-text-justified">
+      <p>
+        The inclusion of <strong>signal-space reconstruction loss provides substantial improvements in
+        fidelity</strong>. We hypothesize that this is due to the relative lack of strong, perceptually
+        aligned latent representations in the 3D domain vs. the image domain for which FlexTok was designed.
+      </p>
     </div>
   </div>
 </section>
