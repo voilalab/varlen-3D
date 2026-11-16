@@ -1,0 +1,51 @@
+/* Adapted from the Nerfies project page (https://github.com/nerfies/nerfies.github.io). */
+body {
+  font-family: 'Noto Sans', sans-serif;
+}
+
+.publication-title {
+  font-family: 'Google Sans', 'Noto Sans', sans-serif;
+}
+
+.publication-authors {
+  font-family: 'Google Sans', 'Noto Sans', sans-serif;
+}
+
+.publication-authors a {
+  color: hsl(204, 86%, 53%) !important;
+}
+
+.publication-authors a:hover {
+  text-decoration: underline;
+}
+
+.author-block {
+  display: inline-block;
+}
+
+.publication-links {
+  margin-top: 1rem;
+}
+
+.link-block a {
+  margin-top: 5px;
+  margin-bottom: 5px;
+}
+
+.section .title.is-3 {
+  font-family: 'Google Sans', 'Noto Sans', sans-serif;
+}
+
+.figure img {
+  width: 100%;
+  height: auto;
+}
+
+.figure-caption {
+  margin-top: 0.75rem;
+  color: #4a4a4a;
+}
+
+.footer .content {
+  font-size: 0.9rem;
+}

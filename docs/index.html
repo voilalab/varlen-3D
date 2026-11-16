@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Data-Driven Variable-Length Compression of 3D Representations">
+  <title>Data-Driven Variable-Length Compression of 3D Representations</title>
+
+  <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Castoro" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+  <link rel="stylesheet" href="./static/css/index.css">
+</head>
+<body>
+
+<section class="hero">
+  <div class="hero-body">
+    <div class="container is-max-desktop">
+      <div class="columns is-centered">
+        <div class="column has-text-centered">
+          <h1 class="title is-1 publication-title">Data-Driven Variable-Length Compression of 3D Representations</h1>
+          <div class="is-size-5 publication-authors">
+            <span class="author-block">Yvette Y. Lin<sup>*</sup>,</span>
+            <span class="author-block">Sai Karthikey Pentapati<sup>*2</sup>,</span>
+            <span class="author-block">Sarvesh Sundaram<sup>1</sup>,</span>
+            <span class="author-block">Guandao Yang<sup>2</sup>,</span>
+            <span class="author-block">Sara Fridovich-Keil<sup>1</sup></span>
+          </div>
+          <div class="is-size-5 publication-authors">
+            <span class="author-block"><sup>1</sup>Georgia Institute of Technology,</span>
+            <span class="author-block"><sup>2</sup>The University of Texas at Austin</span>
+          </div>
+          <div class="is-size-6 publication-authors">
+            <span class="author-block"><sup>*</sup>Equal contribution</span>
+          </div>
+
+          <div class="publication-links">
+            <span class="link-block">
+              <a href="https://github.com/voilalab/varlen-3D" class="external-link button is-normal is-rounded is-dark">
+                <span class="icon"><i class="fab fa-github"></i></span>
+                <span>Code</span>
+              </a>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered has-text-centered">
+      <div class="column is-four-fifths">
+        <h2 class="title is-3">Abstract</h2>
+        <div class="content has-text-justified">
+          <p>
+            Compressing 3D shapes is important for the efficiency of many applications, yet existing methods
+            either cannot leverage dataset-level statistics or use a fixed compression ratio for all shapes.
+            We propose a learned variable-length compression method that exploits structure across a training
+            dataset while adapting compressed representation size to individual shape complexity using only
+            fast feed-forward inference. Our method operates on general latent representations and improves
+            rate&ndash;distortion for both meshes and signed distance fields.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <h2 class="title is-3 has-text-centered">Method</h2>
+    <figure class="figure">
+      <img src="./static/images/fig1_overview.png"
+           alt="Diagram of the variable-length hyper-autoencoder between a frozen signal encoder and decoder.">
+      <figcaption class="figure-caption content has-text-justified">
+        A pretrained signal encoder maps the input signal to per-element latents; our suffix-dropout
+        autoencoder compresses them into an ordered sequence of tokens (green), where any prefix of
+        <i>k</i> tokens suffices to reconstruct the latents, which are decoded back to the signal space.
+        Dashed arrows show the two supervision paths: the latent loss and the downstream reconstruction
+        losses. Since the underlying autoencoder is frozen, our method can be combined with any existing
+        shape autoencoder without retraining it.
+      </figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <h2 class="title is-3 has-text-centered">Results</h2>
+    <figure class="figure">
+      <img src="./static/images/fig2_results.png"
+           alt="SDF and mesh reconstructions decoded from k tokens, with rate-distortion and Chamfer distance versus k plots.">
+      <figcaption class="figure-caption content has-text-justified">
+        Variable-length compression of SDF and MeshGPT latents. Top: sample SDF and mesh reconstructions,
+        each decoded from the first <i>k</i> tokens. As <i>k</i> increases, so does the fidelity compared to
+        the ground truth. Bottom: baseline comparison of rate&ndash;distortion and Chamfer distance vs.
+        <i>k</i>, for SDF and mesh compression. We show compression ratios for both quantized and
+        unquantized versions of MeshGPT; our method is unquantized.
+      </figcaption>
+    </figure>
+
+    <figure class="figure mt-6">
+      <img src="./static/images/fig3_complexity.png"
+           alt="Six chair point clouds ordered by the number of hyper-tokens they need.">
+      <figcaption class="figure-caption content has-text-justified">
+        Number of hyper-tokens needed to achieve a target MSE threshold in latent space increases with the
+        &ldquo;geometric complexity&rdquo; of shapes.
+      </figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <h2 class="title is-3 has-text-centered">Ablations</h2>
+    <div class="columns is-centered">
+      <div class="column is-three-quarters">
+        <figure class="figure">
+          <img src="./static/images/fig4_ablation.png"
+               alt="Chamfer distance versus tokens kept for three decoders.">
+          <figcaption class="figure-caption content has-text-justified">
+            Decoder ablation. Chamfer distance vs. <i>k</i> on meshes for our regression decoder, the same
+            regression decoder trained with the latent loss only, and a FlexTok-style flow decoder. At low
+            <i>k</i> the flow decoder returns a sharper but wrong signal; at high <i>k</i> the regression
+            decoders are more faithful.
+          </figcaption>
+        </figure>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="container">
+    <div class="columns is-centered">
+      <div class="column is-8">
+        <div class="content has-text-centered">
+          <p>
+            This page is adapted from the <a href="https://github.com/nerfies/nerfies.github.io">Nerfies</a>
+            project page template, licensed under a
+            <a rel="license" href="http://creativecommons.org/licenses/by-sa/4.0/">Creative Commons
+            Attribution-ShareAlike 4.0 International License</a>.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
